@@ -1,0 +1,124 @@
+DroneAware Feeder Node Software License
+Copyright (c) 2026 DroneAware, LLC. All rights reserved.
+
+================================================================================
+
+DEFINITIONS
+
+"Software" means the DroneAware feeder node software, including all source
+code, compiled binaries, scripts, configuration files, and documentation
+distributed in this repository.
+
+"Feeder Node" means a hardware device running this Software for the sole
+purpose of capturing and transmitting drone Remote ID telemetry data to the
+DroneAware network.
+
+"Competing Service" means any product, platform, or service that aggregates,
+resells, or redistributes drone Remote ID telemetry data as a primary business
+function, other than the DroneAware network operated by DroneAware, LLC.
+
+================================================================================
+
+LICENSE GRANT
+
+Permission is granted to a single authorized user to download, install, and
+use this Software on hardware you own or control, solely for the purpose of
+operating a DroneAware Feeder Node that contributes data to the DroneAware
+network. This license is non-exclusive, non-transferable, and revocable.
+
+================================================================================
+
+RESTRICTIONS
+
+1. Prohibited Uses. You may NOT:
+   a. Modify and redistribute this Software as a Competing Service or
+      competing product.
+   b. Use this Software to build, support, or operate a Competing Service.
+   c. Sublicense, sell, rent, lease, or otherwise commercially exploit
+      this Software.
+   d. Remove, alter, obscure, or replace any copyright notice, branding,
+      or attribution contained in this Software.
+   e. Reverse engineer, decompile, or disassemble the compiled binaries
+      except to the extent permitted by applicable law.
+
+2. Network Restriction. This Software may only be used to transmit data to
+   DroneAware-operated services. Use of this Software with any Competing
+   Service or third-party data aggregation system is strictly prohibited.
+
+3. No Forking for Competing Use. You may not create derivative works of
+   this Software for the purpose of building or operating a Competing
+   Service.
+
+4. Ownership. This Software and all associated intellectual property,
+   including all modifications and derivative works permitted hereunder,
+   remain the exclusive property of DroneAware, LLC.
+
+5. Termination. This license terminates automatically and immediately upon
+   any violation of these terms. Upon termination, you must cease all use
+   of the Software and destroy all copies in your possession. DroneAware,
+   LLC reserves the right to pursue all available legal remedies for
+   violations.
+
+================================================================================
+
+NETWORK SERVICE
+
+DroneAware, LLC reserves the right to modify, suspend, or discontinue the
+DroneAware network or any related services at any time without notice or
+liability. This license does not grant any right to continued network access.
+
+================================================================================
+
+THIRD-PARTY COMPONENTS
+
+This Software includes third-party open-source components distributed under
+their respective licenses. Key components include:
+
+  - bleak          (MIT License)
+  - requests       (Apache License 2.0)
+  - charset-normalizer  (MIT License)
+
+A full list of third-party components and their license texts is available at:
+https://github.com/fduflyer/DroneAware-Node
+
+================================================================================
+
+DISCLAIMER OF WARRANTIES
+
+THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT. DRONEAWARE,
+LLC DOES NOT WARRANT THAT THE SOFTWARE WILL BE ERROR-FREE, UNINTERRUPTED,
+OR FREE OF SECURITY VULNERABILITIES. YOU ASSUME ALL RISK ARISING FROM YOUR
+USE OF THIS SOFTWARE AND OPERATION OF A FEEDER NODE.
+
+================================================================================
+
+LIMITATION OF LIABILITY
+
+IN NO EVENT SHALL DRONEAWARE, LLC, ITS OFFICERS, DIRECTORS, EMPLOYEES, OR
+AGENTS BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING BUT NOT LIMITED TO LOSS OF DATA, BUSINESS
+INTERRUPTION, OR LOSS OF PROFITS) ARISING OUT OF OR IN CONNECTION WITH THIS
+SOFTWARE OR ITS USE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+DRONEAWARE'S TOTAL LIABILITY TO YOU FOR ALL CLAIMS ARISING UNDER THIS LICENSE
+SHALL NOT EXCEED ZERO DOLLARS ($0.00), AS THIS SOFTWARE IS PROVIDED FREE OF
+CHARGE.
+
+================================================================================
+
+GOVERNING LAW
+
+This license is governed by and construed in accordance with the laws of the
+State of New Jersey, United States, without regard to its conflict of law
+principles. Any disputes arising under or in connection with this license
+shall be resolved exclusively in the state or federal courts located in
+New Jersey, and you hereby consent to the personal jurisdiction of such
+courts.
+
+================================================================================
+
+CONTACT
+
+DroneAware, LLC
+https://droneaware.io
