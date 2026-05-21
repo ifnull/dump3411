@@ -62,18 +62,37 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now droneaware-ble droneaware-wifi
 ```
 
-Watch detections live:
-
-```bash
-journalctl -u droneaware-ble -u droneaware-wifi -f
-```
-
 Other commands:
 
 ```bash
 sudo systemctl status droneaware-wifi      # check state
 sudo systemctl restart droneaware-wifi     # restart
 sudo systemctl disable --now droneaware-*  # stop and remove from boot
+```
+
+## Logs
+
+The feeders write no log file of their own. Under systemd their output goes to
+the journal. By default that journal is **volatile (RAM only)** and is wiped on
+reboot — so detections wouldn't survive a power cycle.
+
+To keep detection history across reboots, install the journald drop-in. It
+makes the journal persistent and caps it at 50 MB so it can never fill the SD
+card:
+
+```bash
+sudo mkdir -p /etc/systemd/journald.conf.d
+sudo cp journald-droneaware.conf /etc/systemd/journald.conf.d/
+sudo systemctl restart systemd-journald
+```
+
+Then view detections:
+
+```bash
+journalctl -u droneaware-ble -u droneaware-wifi -f          # live tail
+journalctl -u droneaware-wifi --since "today"               # by date
+journalctl -u droneaware-wifi --since "2026-05-21 09:00"    # from a time
+journalctl --disk-usage                                     # how much it's using
 ```
 
 ## What you'll see
