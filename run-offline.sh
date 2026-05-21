@@ -1,16 +1,11 @@
 #!/usr/bin/env bash
-# DroneAware — fully offline runner.
+# DroneAware — offline runner (manual / testing).
 #
-# Detects drones via BLE (the Pi's built-in Bluetooth) and WiFi (a USB
-# monitor-mode adapter) and prints decoded detections to this terminal.
-# Nothing is sent to droneaware.io — no token, no uplink, no heartbeat.
-# Detections are also broadcast on UDP 255.255.255.255:9999 for any device
-# on your LAN, and buffered in RAM at /run/droneaware/detections.jsonl.
+# Runs both detectors in one terminal. For boot-time autostart use the
+# systemd services instead — see README.md.
 #
 # Usage:
 #   sudo ./run-offline.sh [wifi-interface]      # default wifi-interface: wlan1
-#
-# Find your USB WiFi adapter's interface name with:  ip link
 set -u
 
 WIFI_IFACE="${1:-wlan1}"
@@ -22,16 +17,10 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
-echo "=================================================="
-echo " DroneAware — OFFLINE mode (no data leaves this Pi)"
-echo "   BLE  : built-in Bluetooth (hci0)"
-echo "   WiFi : ${WIFI_IFACE} (monitor mode)"
-echo " Ctrl-C stops both feeders."
-echo "=================================================="
+echo "DroneAware — BLE (hci0) + WiFi (${WIFI_IFACE}).  Ctrl-C stops both."
 
-# Kill any leftover child processes when this script exits.
 trap 'kill $(jobs -p) 2>/dev/null' EXIT
 
-python3 "$DIR/ble_feeder.py"  --offline 2>&1 | sed -u 's/^/BLE  | /' &
-python3 "$DIR/wifi_feeder.py" --offline --iface "$WIFI_IFACE" 2>&1 | sed -u 's/^/WIFI | /' &
+python3 "$DIR/ble_feeder.py"  2>&1 | sed -u 's/^/BLE  | /' &
+python3 "$DIR/wifi_feeder.py" --iface "$WIFI_IFACE" 2>&1 | sed -u 's/^/WIFI | /' &
 wait

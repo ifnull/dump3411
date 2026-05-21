@@ -1,0 +1,15 @@
+[Unit]
+Description=DroneAware WiFi Remote ID detector (offline)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/pi/drone-aware-zero/wifi_feeder.py --iface wlan1
+Restart=on-failure
+RestartSec=5
+# SIGTERM is handled in-process to restore the adapter to managed mode.
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

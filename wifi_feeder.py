@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """
-DroneAware WiFi Feeder - Remote ID Capture Script
-Hardware: Raspberry Pi 4 + Alfa AWUS036N (RT3070, 2.4 GHz)
-Captures WiFi Remote ID in 802.11 Beacon frames (ASTM F3411) and forwards to
-the DroneAware server.
+DroneAware WiFi detector — offline Remote ID capture.
+
+Puts a USB monitor-mode adapter (e.g. Alfa AWUS036NEH, RT3070) into monitor
+mode, hops 2.4 GHz channels 1-11, decodes Remote ID from 802.11 beacon frames
+(ASTM F3411), and prints detections to the terminal / systemd journal.
+No network connection, no token, no data sharing.
 
 Supports:
   - Wi-Fi Beacon transport (vendor IE, OUI FA:0B:BC, type 0x0D)  [F3411-19/22a]
@@ -12,54 +14,30 @@ Supports:
 Uses raw AF_PACKET sockets (stdlib only — no scapy dependency).
 
 Usage:
-    sudo python3 wifi_feeder.py --iface wlan1 --node-id NJ001 --server http://server/api
+    sudo python3 wifi_feeder.py --iface wlan1 [--verbose]
 
 Requirements:
-    pip3 install requests
-    sudo apt install iw wireless-tools
+    sudo apt install iw rfkill
 """
 
-import threading
-import subprocess
-import time
-import struct
-import json
+import argparse
 import hashlib
 import logging
-import argparse
-import socket
-import glob
 import os
+import signal
+import socket
+import struct
+import subprocess
 import sys
-import serial
-import requests
+import threading
+import time
 
 # -- Logging -------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler("/var/log/droneaware_wifi.log"),
-    ],
 )
 log = logging.getLogger("droneaware.wifi")
-
-def _read_fw_version(fallback: str) -> str:
-    try:
-        with open("/opt/droneaware/version") as f:
-            v = f.read().strip()
-            return v if v else fallback
-    except Exception:
-        return fallback
-
-FW_VERSION = _read_fw_version("1.1.3")
-
-# -- GPS State -----------------------------------------------------------------
-
-_gps_lat  = None
-_gps_lon  = None
-_gps_lock = threading.Lock()
 
 
 # -- Constants -----------------------------------------------------------------
@@ -119,7 +97,6 @@ UA_TYPE = {
 
 
 # -- Remote ID Decoder ---------------------------------------------------------
-# (mirrors ble_feeder.py — pure functions, no shared state)
 
 def parse_basic_id(data: bytes) -> dict:
     if len(data) < 25:
@@ -292,7 +269,6 @@ def _parse_dot11_mgmt(data: bytes) -> tuple[int, str, int] | None:
 
     Returns (subtype, addr2_mac_str, body_offset) or None if not a mgmt frame.
     addr2 is the transmitter (Source Address).
-    body_offset is the byte offset of the frame body within `data`.
     Management frames have a fixed 24-byte MAC header.
     """
     if len(data) < 24:
@@ -315,7 +291,7 @@ def _extract_beacon_rid(body: bytes) -> bytes | None:
       Fixed parameters: 8 (timestamp) + 2 (beacon interval) + 2 (capability) = 12 bytes
       Then: IE chain — tag(1) + length(1) + value(length)
 
-    Returns the 25-byte ODID message or None.
+    Returns the ODID message (single message or Message Pack) or None.
     """
     offset = 12  # skip fixed parameters
     while offset + 2 <= len(body):
@@ -327,7 +303,7 @@ def _extract_beacon_rid(body: bytes) -> bytes | None:
         if tag_id == 221:  # Vendor Specific IE
             info = body[offset + 2: end]
             if len(info) >= 5 and info[:3] == ASTM_OUI and info[3] == ASTM_OUI_TYPE:
-                return info[4:]  # full payload — may be single msg or Message Pack
+                return info[4:]
         offset = end
     return None
 
@@ -335,10 +311,9 @@ def _extract_beacon_rid(body: bytes) -> bytes | None:
 def _is_nan_action(body: bytes) -> bool:
     """
     Detect Wi-Fi NAN action frames carrying ODID (ASTM F3411-22a).
-    Requires the ODID NAN Service ID (sha256('org.opendroneid.remoteid')[:6])
-    to be present in the frame body. This filters out consumer NAN traffic
-    (Apple AirDrop/Handoff, Google Nearby Share, etc.) which uses the same
-    OUI/type but a completely different Service ID.
+    Requires the ODID NAN Service ID to be present in the frame body, which
+    filters out consumer NAN traffic (Apple AirDrop/Handoff, Google Nearby
+    Share) that uses the same OUI/type but a different Service ID.
     """
     if not (
         len(body) >= 6 and
@@ -347,16 +322,12 @@ def _is_nan_action(body: bytes) -> bool:
         body[5] == NAN_OUI_TYPE
     ):
         return False
-    # Scan the first 64 bytes of frame body for the ODID Service ID.
-    # In a well-formed NAN SDF the Service ID appears at a known offset inside
-    # the Service Descriptor attribute — scanning is simpler and equally correct.
     return ODID_NAN_SERVICE_ID in body[:64]
 
 
 # -- Monitor Mode --------------------------------------------------------------
 
-_NM_CONF       = "/etc/NetworkManager/conf.d/droneaware.conf"
-_MONITOR_MACS  = "/opt/droneaware/monitor_macs"
+_NM_CONF = "/etc/NetworkManager/conf.d/droneaware.conf"
 
 
 def _get_backhaul_iface() -> str | None:
@@ -382,55 +353,36 @@ def _get_iface_mac(iface: str) -> str | None:
         return None
 
 
-def _persist_monitor_mac(mac: str):
-    """Add MAC to known monitor MACs file and update NM unmanaged config."""
-    known: set = set()
-    try:
-        with open(_MONITOR_MACS) as f:
-            known = {l.strip() for l in f if l.strip()}
-    except FileNotFoundError:
-        pass
-
-    if mac in known:
-        return
-
-    known.add(mac)
-    try:
-        with open(_MONITOR_MACS, "w") as f:
-            f.write("\n".join(sorted(known)) + "\n")
-    except Exception as e:
-        log.warning(f"[Monitor] Could not write monitor MACs file: {e}")
-        return
-
-    unmanaged = ",".join(f"mac:{m}" for m in sorted(known))
+def _set_nm_unmanaged(mac: str):
+    """
+    Tell NetworkManager to leave the monitor-mode adapter alone. If NM manages
+    the interface it fights monitor mode, causing zero packet capture.
+    """
     nm_body = (
-        "# DroneAware — prevent NetworkManager from managing the monitor adapter.\n"
-        "# If NM manages the monitor interface it fights the feeder's monitor mode\n"
-        "# setup, causing zero packet capture and intermittent SSH instability.\n"
+        "# DroneAware — keep NetworkManager off the monitor-mode adapter.\n"
         "[keyfile]\n"
-        f"unmanaged-devices={unmanaged}\n"
+        f"unmanaged-devices=mac:{mac}\n"
     )
     try:
         os.makedirs(os.path.dirname(_NM_CONF), exist_ok=True)
         with open(_NM_CONF, "w") as f:
             f.write(nm_body)
-        log.info(f"[Monitor] NM unmanaged config updated: {unmanaged}")
+        log.info(f"[Monitor] NetworkManager set to ignore {mac}")
     except Exception as e:
         log.warning(f"[Monitor] Could not update NM config: {e}")
 
 
 def _ensure_monitor_safe(iface: str):
     """
-    Refuse to monitor-mode the active backhaul interface (same check as installer).
-    If the interface is NM-managed but not the backhaul, auto-release and persist its MAC.
+    Refuse to monitor-mode the active backhaul interface. If the interface is
+    NM-managed but not the backhaul, release it so monitor mode sticks.
     """
     backhaul = _get_backhaul_iface()
     if backhaul and iface == backhaul:
-        log.error(f"Refusing to monitor {iface} — it is your active management interface.")
-        log.error("Plug in ethernet or swap adapters and re-run the installer.")
+        log.error(f"Refusing to monitor {iface} — it is your active network interface.")
+        log.error("Plug the USB adapter into a different interface and re-run.")
         sys.exit(1)
 
-    # Check if NM is currently managing this interface
     try:
         r = subprocess.run(
             ["nmcli", "-g", "GENERAL.STATE", "device", "show", iface],
@@ -438,16 +390,13 @@ def _ensure_monitor_safe(iface: str):
         )
         if "unmanaged" not in r.stdout.lower():
             mac = _get_iface_mac(iface)
-            log.warning(
-                f"[Monitor] {iface} is managed by NetworkManager — "
-                "auto-releasing for monitor mode."
-            )
+            log.warning(f"[Monitor] {iface} is NetworkManager-managed — releasing it.")
             subprocess.run(
                 ["nmcli", "device", "set", iface, "managed", "no"],
                 capture_output=True, check=False,
             )
             if mac:
-                _persist_monitor_mac(mac)
+                _set_nm_unmanaged(mac)
     except Exception:
         pass
 
@@ -457,9 +406,9 @@ def set_monitor_mode(iface: str):
     _ensure_monitor_safe(iface)
     log.info(f"Setting {iface} to monitor mode...")
     subprocess.run(["rfkill", "unblock", "all"], check=False, capture_output=True)
-    subprocess.run(["ip", "link", "set", iface, "down"],  check=True)
+    subprocess.run(["ip", "link", "set", iface, "down"], check=True)
     subprocess.run(["iw", "dev", iface, "set", "type", "monitor"], check=True)
-    subprocess.run(["ip", "link", "set", iface, "up"],   check=True)
+    subprocess.run(["ip", "link", "set", iface, "up"], check=True)
     log.info(f"{iface} is now in monitor mode")
 
 
@@ -467,9 +416,9 @@ def restore_managed_mode(iface: str):
     """Restore interface to managed mode on exit."""
     log.info(f"Restoring {iface} to managed mode...")
     try:
-        subprocess.run(["ip", "link", "set", iface, "down"],    check=False)
+        subprocess.run(["ip", "link", "set", iface, "down"], check=False)
         subprocess.run(["iw", "dev", iface, "set", "type", "managed"], check=False)
-        subprocess.run(["ip", "link", "set", iface, "up"],     check=False)
+        subprocess.run(["ip", "link", "set", iface, "up"], check=False)
     except Exception as e:
         log.warning(f"Could not restore managed mode: {e}")
 
@@ -507,272 +456,17 @@ class ChannelHopper(threading.Thread):
         self._stop.set()
 
 
-# -- Health Checks -------------------------------------------------------------
-
-def get_cpu_temp() -> float | None:
-    try:
-        with open("/sys/class/thermal/thermal_zone0/temp") as f:
-            return round(int(f.read().strip()) / 1000.0, 1)
-    except Exception:
-        return None
-
-
-def get_wifi_health(adapter: str | None) -> tuple[bool | None, str | None]:
-    if not adapter:
-        return None, None
-    try:
-        path = f"/sys/class/net/{adapter}/operstate"
-        if not os.path.exists(path):
-            return False, adapter
-        with open(path) as f:
-            state = f.read().strip()
-        return state in ("up", "unknown"), adapter
-    except Exception:
-        return False, adapter
-
-
-# -- HTTP Forwarder ------------------------------------------------------------
-# (identical contract to ble_feeder.Forwarder)
-
-class Forwarder:
-    def __init__(self, server_url: str, node_id: str,
-                 batch_size: int = 10, flush_interval: float = 2.0,
-                 token: str = "", offline: bool = False):
-        self.url            = server_url.rstrip("/") + "/ingest"
-        self.node_id        = node_id
-        self.batch_size     = batch_size
-        self.flush_interval = flush_interval
-        self.token          = token
-        self.offline        = offline
-        self.buffer         = []
-        self.last_flush     = time.time()
-        self.sent_total     = 0
-        self.failed_total   = 0
-        self._lock          = threading.Lock()
-
-    def add(self, event: dict):
-        if self.offline:
-            return  # offline mode — never buffer or upload to droneaware.io
-        with self._lock:
-            self.buffer.append(event)
-            if len(self.buffer) >= self.batch_size:
-                self._flush_locked()
-
-    def tick(self):
-        with self._lock:
-            if time.time() - self.last_flush >= self.flush_interval:
-                self._flush_locked()
-                self.last_flush = time.time()
-
-    def _flush_locked(self):
-        if not self.buffer:
-            return
-        payload      = {"node_id": self.node_id, "events": self.buffer.copy()}
-        self.buffer.clear()
-        try:
-            headers = {"X-Node-Token": self.token} if self.token else {}
-            r = requests.post(self.url, json=payload, headers=headers, timeout=5)
-            r.raise_for_status()
-            self.sent_total += len(payload["events"])
-            log.debug(f"Forwarded {len(payload['events'])} events ({self.sent_total} total)")
-        except requests.RequestException as e:
-            self.failed_total += len(payload["events"])
-            log.warning(f"Forward failed: {e} ({self.failed_total} events lost)")
-
-
-# -- GPS Reader ----------------------------------------------------------------
-
-def nmea_to_decimal(value: str, direction: str) -> float:
-    d = int(float(value) / 100)
-    m = float(value) - d * 100
-    decimal = d + m / 60.0
-    if direction in ('S', 'W'):
-        decimal = -decimal
-    return round(decimal, 6)
-
-
-GPS_BAUD_RATES = [4800, 9600, 38400, 115200]
-
-
-def find_gps_device() -> str | None:
-    env_device = os.environ.get("GPS_DEVICE", "").strip()
-    if env_device:
-        return env_device
-    candidates = glob.glob('/dev/ttyUSB*') + glob.glob('/dev/ttyACM*')
-    return candidates[0] if candidates else None
-
-
-def _nmea_checksum_valid(sentence: str) -> bool:
-    """Validate NMEA sentence checksum (XOR of bytes between $ and *)."""
-    try:
-        if '*' not in sentence:
-            return False
-        content, checksum_str = sentence.rsplit('*', 1)
-        if content.startswith('$'):
-            content = content[1:]
-        expected = int(checksum_str[:2], 16)
-        actual = 0
-        for c in content:
-            actual ^= ord(c)
-        return actual == expected
-    except Exception:
-        return False
-
-
-def detect_baud_rate(device: str) -> int | None:
-    """Try common baud rates; require 2 consecutive valid NMEA sentences with correct checksum."""
-    for baud in GPS_BAUD_RATES:
-        try:
-            valid_count = 0
-            with serial.Serial(device, baudrate=baud, timeout=2) as ser:
-                for _ in range(24):
-                    line = ser.readline().decode('ascii', errors='ignore').strip()
-                    if line.startswith(('$GP', '$GN')) and _nmea_checksum_valid(line):
-                        valid_count += 1
-                        if valid_count >= 2:
-                            log.info(f"[GPS] Detected baud rate {baud} on {device}")
-                            return baud
-                    else:
-                        valid_count = 0  # reset on any invalid line
-        except serial.SerialException:
-            pass
-    return None
-
-
-def gps_reader_thread(device: str):
-    """Background thread: reads NMEA sentences, updates _gps_lat/_gps_lon."""
-    global _gps_lat, _gps_lon
-    while True:
-        try:
-            # Use GPS_BAUD from config.env if set, otherwise auto-detect
-            configured_baud = os.environ.get("GPS_BAUD", "").strip()
-            if configured_baud:
-                try:
-                    baud = int(configured_baud)
-                    log.info(f"[GPS] Using configured baud rate {baud}")
-                except ValueError:
-                    log.warning(f"[GPS] Invalid GPS_BAUD value '{configured_baud}' — falling back to auto-detect")
-                    baud = detect_baud_rate(device)
-            else:
-                baud = detect_baud_rate(device)
-
-            if baud is None:
-                log.warning(f"[GPS] Could not detect baud rate on {device} — retrying in 10s")
-                time.sleep(10)
-                continue
-            with serial.Serial(device, baudrate=baud, timeout=2) as ser:
-                log.info(f"[GPS] Reading from {device} at {baud} baud")
-                while True:
-                    line = ser.readline().decode('ascii', errors='ignore').strip()
-                    if not line.startswith(('$GPRMC', '$GNRMC')):
-                        continue
-                    parts = line.split(',')
-                    if len(parts) < 7 or parts[2] != 'A':
-                        continue
-                    try:
-                        lat = nmea_to_decimal(parts[3], parts[4])
-                        lon = nmea_to_decimal(parts[5], parts[6].split('*')[0])
-                        with _gps_lock:
-                            _gps_lat = lat
-                            _gps_lon = lon
-                    except (ValueError, IndexError):
-                        continue
-        except serial.SerialException as e:
-            log.warning(f"[GPS] Serial error: {e} — retrying in 10s")
-            time.sleep(10)
-        except Exception as e:
-            log.warning(f"[GPS] Unexpected error: {e} — retrying in 10s")
-            time.sleep(10)
-
-
-# -- Local Publisher -----------------------------------------------------------
-
-class LocalPublisher:
-    """
-    Writes decoded detections to a tmpfs ring buffer and UDP LAN broadcast.
-
-    Buffer: /run/droneaware/detections.jsonl  (RAM only — gone on reboot,
-            zero SD card wear). Bounded to MAX_LINES entries.
-    UDP:    255.255.255.255:9999 — any device on the LAN can listen.
-    """
-    BUFFER_PATH = "/run/droneaware/detections.jsonl"
-    UDP_PORT    = 9999
-    MAX_LINES   = 3600  # ~60 min at 1 event/sec
-
-    def __init__(self):
-        self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        os.makedirs(os.path.dirname(self.BUFFER_PATH), exist_ok=True)
-        self._line_count = 0
-
-    def publish(self, event: dict):
-        decoded = event.get("decoded") or {}
-        if not decoded:
-            return
-
-        record = {
-            "t":     event.get("timestamp") or event.get("observed_at"),
-            "mac":   event.get("source_mac") or event.get("mac"),
-            "radio": event.get("radio"),
-            "rssi":  event.get("rssi"),
-            "type":  decoded.get("message_type"),
-            "lat":   decoded.get("latitude"),
-            "lon":   decoded.get("longitude"),
-            "alt":   decoded.get("altitude_geo"),
-            "speed": decoded.get("ground_speed"),
-            "hdg":   decoded.get("heading"),
-            "id":    decoded.get("uas_id"),
-        }
-        line = json.dumps(record, separators=(',', ':'))
-
-        try:
-            self._sock.sendto((line + '\n').encode(), ('255.255.255.255', self.UDP_PORT))
-        except Exception:
-            pass
-
-        try:
-            with open(self.BUFFER_PATH, 'a') as f:
-                f.write(line + '\n')
-            self._line_count += 1
-            if self._line_count > self.MAX_LINES:
-                self._trim()
-        except Exception:
-            pass
-
-    def _trim(self):
-        try:
-            with open(self.BUFFER_PATH, 'r') as f:
-                lines = f.readlines()
-            if len(lines) > self.MAX_LINES:
-                with open(self.BUFFER_PATH, 'w') as f:
-                    f.writelines(lines[-self.MAX_LINES:])
-            self._line_count = min(len(lines), self.MAX_LINES)
-        except Exception:
-            pass
-
-
-# -- WiFi Feeder ---------------------------------------------------------------
+# -- WiFi Detector -------------------------------------------------------------
 
 class WiFiFeeder:
-    def __init__(self, iface: str, node_id: str, server_url: str,
-                 verbose: bool = False, batch_size: int = 10,
-                 flush_interval: float = 2.0, channel_dwell: float = 0.2,
-                 token: str = "", offline: bool = False):
-        self.iface       = iface
-        self.node_id     = node_id
-        self.verbose     = verbose
-        self.token       = token
-        self.offline     = offline
-        self.start_time  = time.time()
-        self.forwarder   = Forwarder(server_url, node_id, batch_size, flush_interval, token, offline)
-        self.publisher   = LocalPublisher()
-        self.hopper      = ChannelHopper(iface, CHANNELS_24, channel_dwell)
-        self.count       = 0
-        self.nan_count   = 0
-        self._scanning   = False
+    def __init__(self, iface: str, verbose: bool = False, channel_dwell: float = 0.2):
+        self.iface     = iface
+        self.verbose   = verbose
+        self.hopper    = ChannelHopper(iface, CHANNELS_24, channel_dwell)
+        self.count     = 0
+        self.nan_count = 0
 
     def _on_packet(self, data: bytes):
-        # Parse RadioTap header to get RSSI and skip to 802.11 MAC header
         rt_len, rssi = _parse_radiotap(data)
         if rt_len >= len(data):
             return
@@ -795,66 +489,50 @@ class WiFiFeeder:
             if decoded is None:
                 return
 
-            # Unpack Message Pack into individual sub-messages so the server
-            # receives each message type (Basic ID, Location, System, etc.)
-            # as a discrete event rather than one opaque blob.
             if decoded.get("message_type") == "Message Pack":
                 sub_messages = decoded.get("messages", [])
             else:
                 sub_messages = [decoded]
 
-            ts = time.time()
             for msg in sub_messages:
                 # Drop Location/Vector messages with no valid GPS fix
                 if msg.get("message_type") == "Location/Vector" and "latitude" not in msg:
                     continue
                 self.count += 1
-                raw_hex = msg.get("raw_hex", rid_payload.hex().upper())
-                event = {
-                    "node_id":   self.node_id,
-                    "timestamp": ts,
-                    "radio":     "wifi_beacon",
-                    "mac":       addr2,
-                    "rssi":      rssi,
-                    "payload":   raw_hex,
-                    "decoded":   msg,
-                }
                 if self.verbose or msg.get("message_type") in ("Basic ID", "Location/Vector"):
                     mtype  = msg.get("message_type", "?")
                     uas_id = msg.get("uas_id", "")
-                    lat    = msg.get("latitude", "")
-                    lon    = msg.get("longitude", "")
-                    detail = f"UAS-ID={uas_id}" if uas_id else f"lat={lat} lon={lon}" if lat else ""
+                    lat    = msg.get("latitude")
+                    lon    = msg.get("longitude")
+                    if uas_id:
+                        detail = f"UAS-ID={uas_id}"
+                    elif lat is not None:
+                        detail = f"lat={lat} lon={lon}"
+                    else:
+                        detail = ""
                     log.info(
                         f"[WiFi-Beacon] MAC={addr2}  RSSI={rssi}dBm  "
                         f"Type={mtype}  {detail}"
                     )
-                self.forwarder.add(event)
-                self.publisher.publish(event)
             return
 
         # ---- Wi-Fi NAN Remote ID (subtype 13 — action frame) ----
         if subtype == 13 and _is_nan_action(body):
             self.nan_count += 1
-            raw = body.hex().upper()
-
             if self.verbose:
-                log.info(f"[WiFi-NAN] MAC={addr2}  RSSI={rssi}dBm  raw={raw[:40]}...")
+                log.info(
+                    f"[WiFi-NAN] MAC={addr2}  RSSI={rssi}dBm  "
+                    f"raw={body.hex().upper()[:40]}..."
+                )
 
-            event = {
-                "node_id":   self.node_id,
-                "timestamp": time.time(),
-                "radio":     "wifi_nan",
-                "mac":       addr2,
-                "rssi":      rssi,
-                "payload":   raw,
-                "decoded":   None,  # NAN full parsing is a future enhancement
-            }
-            self.forwarder.add(event)
+    def _heartbeat_loop(self):
+        while True:
+            time.sleep(60)
+            log.info(f"[Heartbeat] Beacon RID={self.count}  NAN={self.nan_count}")
 
     def run(self):
-        log.info(f"DroneAware WiFi Feeder - Node: {self.node_id}")
-        log.info(f"Interface: {self.iface}  |  Channels: {CHANNELS_24}")
+        log.info(f"DroneAware WiFi detector — interface {self.iface}")
+        log.info(f"Channels: {CHANNELS_24}")
 
         set_monitor_mode(self.iface)
         self.hopper.start()
@@ -864,10 +542,8 @@ class WiFiFeeder:
         sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(3))
         sock.bind((self.iface, 0))
         sock.settimeout(1.0)
-        self._scanning = True
 
-        flush_thread = threading.Thread(target=self._flush_loop, daemon=True)
-        flush_thread.start()
+        threading.Thread(target=self._heartbeat_loop, daemon=True).start()
 
         try:
             while True:
@@ -877,109 +553,26 @@ class WiFiFeeder:
                 except socket.timeout:
                     continue
         except KeyboardInterrupt:
-            log.info("Feeder stopped by user.")
+            log.info("Stopped.")
         finally:
             sock.close()
             self.hopper.stop()
             restore_managed_mode(self.iface)
-            log.info(
-                f"[Summary] Beacon RID={self.count}  NAN frames={self.nan_count}  "
-                f"sent={self.forwarder.sent_total}  failed={self.forwarder.failed_total}"
-            )
-
-    def _flush_loop(self):
-        """Periodically flush the forwarder buffer (runs in background thread)."""
-        last_heartbeat = time.time()
-        while True:
-            time.sleep(1.0)
-            self.forwarder.tick()
-            if time.time() - last_heartbeat >= 60:
-                last_heartbeat = time.time()
-                log.info(
-                    f"[Heartbeat] Beacon RID={self.count}  NAN={self.nan_count}  "
-                    f"sent={self.forwarder.sent_total}  failed={self.forwarder.failed_total}"
-                )
-                if self.token:
-                    try:
-                        with _gps_lock:
-                            lat, lon = _gps_lat, _gps_lon
-                        wifi_ok, wifi_adp = get_wifi_health(self.iface)
-                        cpu_temp          = get_cpu_temp()
-                        has_gps           = os.path.exists(os.environ.get("GPS_DEVICE", "/dev/ttyUSB0"))
-                        mobile            = os.environ.get("NODE_MOBILE", "false").lower() == "true"
-                        requests.post(
-                            "https://api.droneaware.io/api/node/heartbeat",
-                            json={
-                                "node_id":      self.node_id,
-                                "uptime_s":     int(time.time() - self.start_time),
-                                "fw_version":   FW_VERSION,
-                                "cpu_temp_c":   cpu_temp,
-                                "wifi_ok":      wifi_ok,
-                                "wifi_adapter": wifi_adp,
-                                "ble_ok":       None,
-                                "ble_adapter":  None,
-                                "scanning":     self._scanning,
-                                "mobile":       mobile,
-                                "has_gps":      has_gps,
-                                "lat":          lat,
-                                "lon":          lon,
-                            },
-                            headers={"X-Node-Token": self.token},
-                            timeout=5,
-                        )
-                        log.debug("Heartbeat sent to droneaware.io")
-                    except requests.RequestException as e:
-                        log.warning(f"Heartbeat failed: {e}")
+            log.info(f"[Summary] Beacon RID={self.count}  NAN frames={self.nan_count}")
 
 
-# -- Enrollment ----------------------------------------------------------------
+def _handle_sigterm(signum, frame):
+    """systemctl stop sends SIGTERM — raise so run()'s finally restores the adapter."""
+    raise KeyboardInterrupt
 
-TOKEN_FILE = "/etc/droneaware/token"
-
-
-def resolve_token() -> str:
-    """Load the node credential written by the installer.
-
-    Exits with a clear error if the credential is missing — enrollment
-    is handled entirely by the installer, not the feeder.
-    """
-    if os.path.exists(TOKEN_FILE):
-        token = open(TOKEN_FILE).read().strip()
-        if token:
-            log.info(f"Loaded node credential from {TOKEN_FILE}")
-            return token
-
-    log.error("No node credential found at %s.", TOKEN_FILE)
-    log.error("This node has not been enrolled. Run the DroneAware installer:")
-    log.error("  curl -fsSL https://droneaware.io/install | sudo bash")
-    sys.exit(1)
-
-
-# -- Entry Point ---------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(
-        description="DroneAware WiFi Remote ID Feeder (Raspberry Pi + Alfa AWUS036N)"
+        description="DroneAware WiFi Remote ID detector (offline)"
     )
     parser.add_argument(
         "--iface", default="wlan1",
-        help="Monitor-mode interface (default: wlan1)"
-    )
-    parser.add_argument(
-        "--node-id", default=socket.gethostname(),
-        help="Unique node ID (default: hostname)"
-    )
-    parser.add_argument(
-        "--server", default="http://localhost:8000/api",
-        help="DroneAware server base URL"
-    )
-    parser.add_argument(
-        "--batch-size", type=int, default=10,
-        help="Events per HTTP batch (default: 10)"
-    )
-    parser.add_argument(
-        "--flush-interval", type=float, default=2.0,
-        help="Max seconds between flushes (default: 2.0)"
+        help="Monitor-mode interface — the USB adapter (default: wlan1)"
     )
     parser.add_argument(
         "--channel-dwell", type=float, default=0.2,
@@ -987,38 +580,16 @@ def main():
     )
     parser.add_argument(
         "--verbose", "-v", action="store_true",
-        help="Log every decoded packet"
-    )
-    parser.add_argument(
-        "--offline", action="store_true",
-        help="Run fully offline: no enrollment token, no uplink/heartbeat to droneaware.io"
+        help="Log every decoded message and NAN frame"
     )
     args = parser.parse_args()
 
-    if args.offline:
-        log.info("Offline mode — no token, no uplink. Detections stay on this device.")
-        token = ""
-    else:
-        token = resolve_token()
-
-    gps_device = find_gps_device()
-    if gps_device:
-        log.info(f"[GPS] Dongle detected at {gps_device}")
-        t = threading.Thread(target=gps_reader_thread, args=(gps_device,), daemon=True)
-        t.start()
-    else:
-        log.info("[GPS] No GPS dongle detected — position will not be reported")
+    signal.signal(signal.SIGTERM, _handle_sigterm)
 
     feeder = WiFiFeeder(
         iface=args.iface,
-        node_id=args.node_id,
-        server_url=args.server,
         verbose=args.verbose,
-        batch_size=args.batch_size,
-        flush_interval=args.flush_interval,
         channel_dwell=args.channel_dwell,
-        token=token,
-        offline=args.offline,
     )
     feeder.run()
 
