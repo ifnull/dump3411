@@ -1,0 +1,15 @@
+[Unit]
+Description=DroneAware Remote ID detector + JSON feed (offline)
+After=bluetooth.target network-online.target
+Wants=bluetooth.target network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/pi/drone-aware-zero/droneaware.py --wifi-iface wlan1 --serve 0.0.0.0:8754
+Restart=on-failure
+RestartSec=5
+# Wifi shutdown handler restores the adapter to managed mode; give it time.
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

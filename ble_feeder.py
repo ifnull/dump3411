@@ -17,8 +17,12 @@ import argparse
 import asyncio
 import logging
 import struct
+from typing import TYPE_CHECKING
 
 from bleak import BleakScanner
+
+if TYPE_CHECKING:                       # avoid hard import — feeder must run standalone
+    from tracker import Tracker
 
 # -- Logging -------------------------------------------------------------------
 logging.basicConfig(
@@ -106,9 +110,11 @@ def parse_basic_id(data: bytes) -> dict:
     ua_type = data[1] & 0x0F
     uas_id  = data[2:22].rstrip(b'\x00').decode('ascii', errors='replace')
     return {
-        "id_type": ID_TYPE.get(id_type, f"Unknown({id_type})"),
-        "ua_type": UA_TYPE.get(ua_type, f"Unknown({ua_type})"),
-        "uas_id":  uas_id,
+        "id_type":     ID_TYPE.get(id_type, f"Unknown({id_type})"),
+        "ua_type":     UA_TYPE.get(ua_type, f"Unknown({ua_type})"),
+        "id_type_raw": id_type,         # raw enum — consumed by Tracker.update_basic_id
+        "ua_type_raw": ua_type,
+        "uas_id":      uas_id,
     }
 
 
@@ -201,9 +207,11 @@ def decode_rid_message(raw_bytes: bytes) -> dict | None:
 # -- BLE Detector --------------------------------------------------------------
 
 class BLEFeeder:
-    def __init__(self, adapter: str = "hci0", verbose: bool = False):
+    def __init__(self, adapter: str = "hci0", verbose: bool = False,
+                 tracker: "Tracker | None" = None):
         self.adapter = adapter
         self.verbose = verbose
+        self.tracker = tracker      # optional; when set, decoded messages also feed it
         self.count   = 0
 
     def on_advertisement(self, device, adv):
@@ -233,10 +241,23 @@ class BLEFeeder:
         else:
             sub_messages = [decoded]
 
+        # Process Basic ID first within a pack so the tracker's MAC → uas_id
+        # mapping is in place when Location / System / Operator-ID arrive.
+        sub_messages = sorted(
+            sub_messages, key=lambda m: 0 if m.get("message_type") == "Basic ID" else 1
+        )
+
         self.count += 1
+        mac = device.address
         for msg in sub_messages:
-            if self.verbose or msg.get("message_type") in ("Basic ID", "Location/Vector"):
-                mtype  = msg.get("message_type", "?")
+            mtype = msg.get("message_type", "?")
+
+            # Feed the per-drone tracker if one was injected.
+            if self.tracker is not None:
+                self._update_tracker(mac, mtype, msg, adv.rssi)
+
+            # Existing journald logging — unchanged.
+            if self.verbose or mtype in ("Basic ID", "Location/Vector"):
                 uas_id = msg.get("uas_id", "")
                 lat    = msg.get("latitude")
                 lon    = msg.get("longitude")
@@ -247,9 +268,43 @@ class BLEFeeder:
                 else:
                     detail = ""
                 log.info(
-                    f"[BLE] MAC={device.address}  RSSI={adv.rssi}dBm  "
+                    f"[BLE] MAC={mac}  RSSI={adv.rssi}dBm  "
                     f"Type={mtype}  {detail}"
                 )
+
+    def _update_tracker(self, mac: str, mtype: str, msg: dict, rssi) -> None:
+        """Route a decoded sub-message to the appropriate Tracker.update_*."""
+        if mtype == "Basic ID":
+            self.tracker.update_basic_id(
+                mac=mac, uas_id=msg.get("uas_id", ""),
+                id_type_raw=msg.get("id_type_raw", 0),
+                ua_type_raw=msg.get("ua_type_raw", 0),
+                rssi=rssi, rid_source="ble",
+            )
+        elif mtype == "Location/Vector" and "latitude" in msg:
+            self.tracker.update_location(
+                mac=mac,
+                lat=msg["latitude"], lon=msg["longitude"],
+                alt_geo_m=msg.get("altitude_geo"),
+                height_agl_m=msg.get("height_agl"),
+                gs_mps=msg.get("ground_speed"),
+                heading_deg=msg.get("heading"),
+                vspeed_mps=msg.get("vertical_speed"),
+                rssi=rssi, rid_source="ble",
+            )
+        elif mtype == "System":
+            self.tracker.update_system(
+                mac=mac,
+                op_lat=msg.get("operator_lat"),
+                op_lon=msg.get("operator_lon"),
+                alt_takeoff_m=msg.get("alt_takeoff_geo"),
+                rssi=rssi, rid_source="ble",
+            )
+        elif mtype == "Operator ID":
+            self.tracker.update_operator_id(
+                mac=mac, operator_id=msg.get("operator_id", ""),
+                rssi=rssi, rid_source="ble",
+            )
 
     async def run(self):
         log.info(f"DroneAware BLE detector — adapter {self.adapter}")

@@ -31,6 +31,10 @@ import subprocess
 import sys
 import threading
 import time
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:                       # avoid hard import — feeder must run standalone
+    from tracker import Tracker
 
 # -- Logging -------------------------------------------------------------------
 logging.basicConfig(
@@ -105,9 +109,11 @@ def parse_basic_id(data: bytes) -> dict:
     ua_type = data[1] & 0x0F
     uas_id  = data[2:22].rstrip(b'\x00').decode('ascii', errors='replace')
     return {
-        "id_type": ID_TYPE.get(id_type, f"Unknown({id_type})"),
-        "ua_type": UA_TYPE.get(ua_type, f"Unknown({ua_type})"),
-        "uas_id":  uas_id,
+        "id_type":     ID_TYPE.get(id_type, f"Unknown({id_type})"),
+        "ua_type":     UA_TYPE.get(ua_type, f"Unknown({ua_type})"),
+        "id_type_raw": id_type,         # raw enum — consumed by Tracker.update_basic_id
+        "ua_type_raw": ua_type,
+        "uas_id":      uas_id,
     }
 
 
@@ -459,12 +465,15 @@ class ChannelHopper(threading.Thread):
 # -- WiFi Detector -------------------------------------------------------------
 
 class WiFiFeeder:
-    def __init__(self, iface: str, verbose: bool = False, channel_dwell: float = 0.2):
+    def __init__(self, iface: str, verbose: bool = False, channel_dwell: float = 0.2,
+                 tracker: "Tracker | None" = None):
         self.iface     = iface
         self.verbose   = verbose
+        self.tracker   = tracker      # optional; when set, decoded messages also feed it
         self.hopper    = ChannelHopper(iface, CHANNELS_24, channel_dwell)
         self.count     = 0
         self.nan_count = 0
+        self._stop     = threading.Event()  # for orderly shutdown from another thread
 
     def _on_packet(self, data: bytes):
         rt_len, rssi = _parse_radiotap(data)
@@ -494,13 +503,26 @@ class WiFiFeeder:
             else:
                 sub_messages = [decoded]
 
+            # Process Basic ID first within a pack so the tracker's MAC →
+            # uas_id mapping is in place when Location / System / Operator-ID
+            # arrive in the same beacon.
+            sub_messages = sorted(
+                sub_messages,
+                key=lambda m: 0 if m.get("message_type") == "Basic ID" else 1,
+            )
+
             for msg in sub_messages:
-                # Drop Location/Vector messages with no valid GPS fix
-                if msg.get("message_type") == "Location/Vector" and "latitude" not in msg:
+                mtype = msg.get("message_type", "?")
+                # Drop Location/Vector messages with no valid GPS fix.
+                if mtype == "Location/Vector" and "latitude" not in msg:
                     continue
                 self.count += 1
-                if self.verbose or msg.get("message_type") in ("Basic ID", "Location/Vector"):
-                    mtype  = msg.get("message_type", "?")
+
+                # Feed the per-drone tracker if one was injected.
+                if self.tracker is not None:
+                    self._update_tracker(addr2, mtype, msg, rssi)
+
+                if self.verbose or mtype in ("Basic ID", "Location/Vector"):
                     uas_id = msg.get("uas_id", "")
                     lat    = msg.get("latitude")
                     lon    = msg.get("longitude")
@@ -525,10 +547,48 @@ class WiFiFeeder:
                     f"raw={body.hex().upper()[:40]}..."
                 )
 
+    def _update_tracker(self, mac: str, mtype: str, msg: dict, rssi) -> None:
+        """Route a decoded sub-message to the appropriate Tracker.update_*."""
+        if mtype == "Basic ID":
+            self.tracker.update_basic_id(
+                mac=mac, uas_id=msg.get("uas_id", ""),
+                id_type_raw=msg.get("id_type_raw", 0),
+                ua_type_raw=msg.get("ua_type_raw", 0),
+                rssi=rssi, rid_source="wifi_beacon",
+            )
+        elif mtype == "Location/Vector" and "latitude" in msg:
+            self.tracker.update_location(
+                mac=mac,
+                lat=msg["latitude"], lon=msg["longitude"],
+                alt_geo_m=msg.get("altitude_geo"),
+                height_agl_m=msg.get("height_agl"),
+                gs_mps=msg.get("ground_speed"),
+                heading_deg=msg.get("heading"),
+                vspeed_mps=msg.get("vertical_speed"),
+                rssi=rssi, rid_source="wifi_beacon",
+            )
+        elif mtype == "System":
+            self.tracker.update_system(
+                mac=mac,
+                op_lat=msg.get("operator_lat"),
+                op_lon=msg.get("operator_lon"),
+                alt_takeoff_m=msg.get("alt_takeoff_geo"),
+                rssi=rssi, rid_source="wifi_beacon",
+            )
+        elif mtype == "Operator ID":
+            self.tracker.update_operator_id(
+                mac=mac, operator_id=msg.get("operator_id", ""),
+                rssi=rssi, rid_source="wifi_beacon",
+            )
+
     def _heartbeat_loop(self):
         while True:
             time.sleep(60)
             log.info(f"[Heartbeat] Beacon RID={self.count}  NAN={self.nan_count}")
+
+    def stop(self) -> None:
+        """Signal run() to exit; restore_managed_mode() runs in the finally."""
+        self._stop.set()
 
     def run(self):
         log.info(f"DroneAware WiFi detector — interface {self.iface}")
@@ -546,7 +606,7 @@ class WiFiFeeder:
         threading.Thread(target=self._heartbeat_loop, daemon=True).start()
 
         try:
-            while True:
+            while not self._stop.is_set():
                 try:
                     data = sock.recv(65535)
                     self._on_packet(data)

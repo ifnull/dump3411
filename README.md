@@ -1,12 +1,12 @@
 # drone-aware-zero
 
 A drone Remote ID detector for the **Raspberry Pi Zero W**. Detects nearby
-drones over BLE and WiFi and prints them to the terminal. Fully offline — no
-account, no token, no data leaves the Pi.
+drones over BLE and WiFi, prints them to the journal, and optionally serves
+a JSON feed for LAN consumers. Fully offline — no account, no token, no
+data leaves the Pi.
 
 Stripped-down fork of the DroneAware node feeders: the network uplink,
-enrollment, heartbeat, GPS, and on-disk buffers have been removed. Detection
-and decoding only.
+enrollment, heartbeat, GPS, and on-disk buffers have been removed.
 
 ## Hardware
 
@@ -30,8 +30,8 @@ sudo apt update
 sudo apt install -y python3-bleak iw rfkill bluez
 ```
 
-`bluez` is usually already present. Installing via apt avoids Bookworm's
-"externally-managed environment" pip error.
+`bluez` is usually already present. The HTTP feed uses stdlib `http.server`,
+no extra deps.
 
 ## Run
 
@@ -48,37 +48,59 @@ ip link
 sudo ./run-offline.sh wlan1
 ```
 
-Ctrl-C stops both and returns the WiFi adapter to normal mode.
+This launches `droneaware.py` with both radios and the JSON feed on port
+8754. Ctrl-C stops it and returns the WiFi adapter to managed mode.
 
 ### As a service (starts on boot)
 
-The service files assume the repo lives at `/home/pi/drone-aware-zero` and the
-USB adapter is `wlan1`. Edit the paths/interface in the `.service` files first
-if yours differ.
+The service file assumes the repo lives at `/home/pi/drone-aware-zero` and
+the USB adapter is `wlan1`. Edit `droneaware.service` if either differs.
 
 ```bash
-sudo cp droneaware-ble.service droneaware-wifi.service /etc/systemd/system/
+sudo cp droneaware.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now droneaware-ble droneaware-wifi
+sudo systemctl enable --now droneaware
 ```
 
 Other commands:
 
 ```bash
-sudo systemctl status droneaware-wifi      # check state
-sudo systemctl restart droneaware-wifi     # restart
-sudo systemctl disable --now droneaware-*  # stop and remove from boot
+sudo systemctl status droneaware       # check state
+sudo systemctl restart droneaware      # restart
+sudo systemctl disable --now droneaware # stop and remove from boot
 ```
+
+## Local JSON feed
+
+When `--serve HOST:PORT` is passed (the default `run-offline.sh` and the
+service both pass `--serve 0.0.0.0:8754`), `droneaware.py` exposes:
+
+```
+GET http://<pi>:8754/data/remoteid.json
+```
+
+A snapshot of currently-tracked drones, ~1 Hz polling cadence, intended for
+consumers like `adsb-enrich` to fold into Home Assistant. See **FEED.md** for
+the wire contract.
+
+Quick check from another LAN device:
+
+```bash
+curl -s http://drone-detector.local:8754/data/remoteid.json | jq .
+```
+
+The feed is additive — it does not change the journal logging behavior. To
+run detection-only (no feed) drop `--serve` from the command line.
 
 ## Logs
 
-The feeders write no log file of their own. Under systemd their output goes to
-the journal. By default that journal is **volatile (RAM only)** and is wiped on
-reboot — so detections wouldn't survive a power cycle.
+The detector writes no log file of its own. Under systemd its output goes
+to the journal. By default that journal is **volatile (RAM only)** and is
+wiped on reboot — so detections wouldn't survive a power cycle.
 
 To keep detection history across reboots, install the journald drop-in. It
-makes the journal persistent and caps it at 50 MB so it can never fill the SD
-card:
+makes the journal persistent and caps it at 50 MB so it can never fill the
+SD card:
 
 ```bash
 sudo mkdir -p /etc/systemd/journald.conf.d
@@ -89,10 +111,10 @@ sudo systemctl restart systemd-journald
 Then view detections:
 
 ```bash
-journalctl -u droneaware-ble -u droneaware-wifi -f          # live tail
-journalctl -u droneaware-wifi --since "today"               # by date
-journalctl -u droneaware-wifi --since "2026-05-21 09:00"    # from a time
-journalctl --disk-usage                                     # how much it's using
+journalctl -u droneaware -f                              # live tail
+journalctl -u droneaware --since "today"                 # by date
+journalctl -u droneaware --since "2026-05-21 09:00"      # from a time
+journalctl --disk-usage                                  # how much it's using
 ```
 
 ## What you'll see
@@ -105,23 +127,41 @@ Detections print one line each:
 ```
 
 A `[Heartbeat]` line every 60 seconds confirms each detector is alive and
-shows the running detection count. Add `--verbose` (or edit the service file)
-to log every decoded message type, not just Basic ID and Location.
+shows the running detection count. Add `--verbose` (or edit the service
+file) to log every decoded message type, not just Basic ID and Location.
+
+## Standalone single-radio testing
+
+The per-radio scripts still run on their own — handy when debugging one
+radio in isolation:
+
+```bash
+sudo python3 ble_feeder.py  --adapter hci0
+sudo python3 wifi_feeder.py --iface wlan1
+```
+
+These do not serve the feed (only `droneaware.py` does).
 
 ## Testing without a real drone
 
-Install the **OpenDroneID transmitter** app on an Android phone (broadcasts
-genuine ASTM F3411 Remote ID over BLE and WiFi) and start a transmit — both
-detectors should pick it up within a few seconds.
+Stand up an OpenDroneID transmitter on a separate machine so the detector
+has something to decode:
+
+- **`opendroneid/transmitter-linux`** — the official C transmitter, runs on
+  any Linux box with a Bluetooth adapter and/or a monitor-mode WiFi card.
+- **`ArduPilot/ArduRemoteID`** — flashes an ESP32-S3 as a standalone Remote
+  ID beacon (pre-built binaries available; ~$10 of hardware).
+
+Don't run the transmitter on the same Pi as the detector.
 
 ## Notes
 
 - Run as root — raw sockets, monitor mode, and Bluetooth all require it.
 - Remote ID is only broadcast by drones registered after Sept 2023. Seeing
   zero detections usually just means nothing compliant is flying nearby.
-- WiFi capture parses every 802.11 management frame in Python. On the Zero's
-  single 1 GHz core this is heavy and may drop packets under busy 2.4 GHz —
-  fine for detection, not lossless.
+- WiFi capture parses every 802.11 management frame in Python. On the
+  Zero's single 1 GHz core this is heavy and may drop packets under busy
+  2.4 GHz — fine for detection, not lossless.
 
 ## Credit & license
 
