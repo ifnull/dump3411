@@ -85,6 +85,15 @@ _UA_TYPE_STRINGS = {
 SCHEMA_VERSION = 1
 
 
+def _read_cpu_temp() -> Optional[float]:
+    """Best-effort CPU temperature (°C). Returns None on non-Pi/Linux hosts."""
+    try:
+        with open("/sys/class/thermal/thermal_zone0/temp") as f:
+            return round(int(f.read().strip()) / 1000.0, 1)
+    except Exception:
+        return None
+
+
 # -- Per-drone state -----------------------------------------------------------
 
 @dataclasses.dataclass
@@ -142,6 +151,9 @@ class Tracker:
         self._ttl = ttl_seconds
         self._messages_total = 0
         self._stop = threading.Event()
+        # Per-source rolling stats for the /status dashboard endpoint.
+        self._by_source: dict[str, dict] = {}       # rid_source -> {messages, last_seen}
+        self._boot_mono = time.monotonic()
 
     # -- updates ---------------------------------------------------------------
 
@@ -154,6 +166,7 @@ class Tracker:
         ua_type = _UA_TYPE_STRINGS.get(ua_type_raw)             # None if unknown
         with self._lock:
             self._messages_total += 1
+            self._bump_source(rid_source, now)
             state = self._drones.get(uas_id)
             if state is None:
                 state = DroneState(uas_id=uas_id, id_type=id_type, ua_type=ua_type)
@@ -180,6 +193,7 @@ class Tracker:
             if state is None:
                 return     # heard position before identity for this MAC; drop
             self._messages_total += 1
+            self._bump_source(rid_source, now)
             state.lat            = lat
             state.lon            = lon
             state.alt_geo_m      = alt_geo_m
@@ -210,6 +224,7 @@ class Tracker:
             if state is None:
                 return
             self._messages_total       += 1
+            self._bump_source(rid_source, now)
             if op_lat is not None:        state.op_lat           = op_lat
             if op_lon is not None:        state.op_lon           = op_lon
             if alt_takeoff_m is not None: state.op_alt_takeoff_m = alt_takeoff_m
@@ -232,6 +247,7 @@ class Tracker:
             if state is None:
                 return
             self._messages_total       += 1
+            self._bump_source(rid_source, now)
             if operator_id:             state.operator_id = operator_id
             state.rssi_dbm              = rssi
             state.rid_source            = rid_source
@@ -246,6 +262,12 @@ class Tracker:
         if uas_id is None:
             return None
         return self._drones.get(uas_id)
+
+    def _bump_source(self, rid_source: str, now_mono: float) -> None:
+        """Track per-transport message counters for the /status dashboard."""
+        src = self._by_source.setdefault(rid_source, {"messages": 0, "last_seen": 0.0})
+        src["messages"]  += 1
+        src["last_seen"]  = now_mono
 
     # -- snapshot --------------------------------------------------------------
 
@@ -301,6 +323,40 @@ class Tracker:
         if operator:
             row["operator"] = operator
         return row
+
+    # -- Health (for /status dashboard endpoint) -------------------------------
+
+    def health(self) -> dict:
+        """Operational snapshot for the status dashboard.
+
+        Lock-cheap: copies a few scalars + the small ``by_source`` dict and
+        releases. The HTTP handler must do nothing else under request.
+        """
+        now_mono = time.monotonic()
+        with self._lock:
+            sources = {
+                src: {
+                    "messages":   info["messages"],
+                    "last_seen_s": round(now_mono - info["last_seen"], 1),
+                }
+                for src, info in self._by_source.items()
+            }
+            messages_total = self._messages_total
+            drones_active  = len(self._drones)
+            uptime_s       = round(now_mono - self._boot_mono, 1)
+            last_any       = max(
+                (info["last_seen"] for info in self._by_source.values()),
+                default=None,
+            )
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "uptime_s":       uptime_s,
+            "messages_total": messages_total,
+            "drones_active":  drones_active,
+            "last_seen_s":    round(now_mono - last_any, 1) if last_any is not None else None,
+            "by_source":      sources,
+            "cpu_temp_c":     _read_cpu_temp(),
+        }
 
     # -- TTL sweep -------------------------------------------------------------
 

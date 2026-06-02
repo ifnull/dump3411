@@ -70,6 +70,14 @@ sudo systemctl restart droneaware      # restart
 sudo systemctl disable --now droneaware # stop and remove from boot
 ```
 
+## Status dashboard
+
+Browser to **`http://drone-detector.local:8754/`** for a live status page —
+service health pill, uptime, per-transport message counters, CPU temp, and a
+table of currently tracked drones. Stdlib HTML embedded in `feed_server.py`;
+polls `/status` and `/data/remoteid.json` every 1.5 s. No build step, no
+external assets. Useful for "is the detector alive?" without ssh + journalctl.
+
 ## Local JSON feed
 
 When `--serve HOST:PORT` is passed (the default `run-offline.sh` and the
