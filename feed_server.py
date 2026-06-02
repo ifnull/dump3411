@@ -78,6 +78,9 @@ _DASHBOARD_HTML = """<!doctype html>
   .id    { color: var(--hi); }
   .empty { color: var(--muted); font-style: italic; padding: 1rem 0;
            text-align: center; }
+  .maplink { color: inherit; text-decoration: none;
+             border-bottom: 1px dotted var(--rule); }
+  .maplink:hover { color: var(--hi); border-bottom-color: var(--dim); }
   .unit-toggle { display: inline-flex; gap: 2px; background: var(--rule);
                  padding: 2px; border-radius: 4px; margin-left: auto; }
   .unit-pill   { background: transparent; border: 0; color: var(--dim);
@@ -118,10 +121,10 @@ _DASHBOARD_HTML = """<!doctype html>
 <h2>Drones</h2>
 <table>
   <thead><tr>
-    <th>UAS-ID</th><th>Type</th><th>Lat, Lon</th><th>Alt</th><th>AGL</th>
+    <th>UAS-ID</th><th>Type</th><th>Drone</th><th>Operator</th><th>Alt</th><th>AGL</th>
     <th>GS</th><th>Track</th><th>RSSI</th><th>Source</th><th>Age</th>
   </tr></thead>
-  <tbody id="drones"><tr><td class="empty" colspan="10">no drones currently in range</td></tr></tbody>
+  <tbody id="drones"><tr><td class="empty" colspan="11">no drones currently in range</td></tr></tbody>
 </table>
 
 <footer>Polls /status and /data/remoteid.json every 1.5 s &middot; FEED.md is the wire contract.</footer>
@@ -187,6 +190,16 @@ function escapeHtml(s) {
   }[c]));
 }
 
+// Render a lat/lon pair as a Google Maps link (opens new tab). Returns '–' if
+// either coord is missing — used for both drone position and operator location.
+function coordCell(lat, lon) {
+  if (lat == null || lon == null) return '–';
+  const txt = fmt.coord(lat) + ', ' + fmt.coord(lon);
+  const url = 'https://www.google.com/maps?q=' + encodeURIComponent(lat + ',' + lon);
+  return '<a class="maplink" href="' + url
+       + '" target="_blank" rel="noopener noreferrer">' + txt + '</a>';
+}
+
 async function fetchJSON(path) {
   const r = await fetch(path, { cache: 'no-store' });
   if (!r.ok) throw new Error(r.status);
@@ -229,12 +242,13 @@ async function tick() {
 
     const drones = document.getElementById('drones');
     if (!f.drones || f.drones.length === 0) {
-      drones.innerHTML = '<tr><td class="empty" colspan="10">no drones currently in range</td></tr>';
+      drones.innerHTML = '<tr><td class="empty" colspan="11">no drones currently in range</td></tr>';
     } else {
       drones.innerHTML = f.drones.map(d => '<tr>'
         + '<td class="id">' + escapeHtml(d.id) + '</td>'
         + '<td>' + (d.ua_type || '–') + '</td>'
-        + '<td class="num">' + fmt.coord(d.lat) + ', ' + fmt.coord(d.lon) + '</td>'
+        + '<td class="num">' + coordCell(d.lat, d.lon) + '</td>'
+        + '<td class="num">' + coordCell(d.operator?.lat, d.operator?.lon) + '</td>'
         + '<td class="num">' + fmt.num(conv.alt(d.alt_geom_ft), 0) + ' ' + lbl.alt() + '</td>'
         + '<td class="num">' + fmt.num(conv.alt(d.agl_ft), 0) + ' ' + lbl.alt() + '</td>'
         + '<td class="num">' + fmt.num(conv.spd(d.gs), 1) + ' ' + lbl.spd() + '</td>'
