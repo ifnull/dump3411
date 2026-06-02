@@ -114,7 +114,10 @@ _DASHBOARD_HTML = """<!doctype html>
 <footer>Polls /status and /data/remoteid.json every 1.5 s &middot; FEED.md is the wire contract.</footer>
 
 <script>
-const SOURCES = ['ble', 'wifi_beacon', 'wifi_nan'];
+// Sources we actively decode into the tracker. We always show these so a
+// dead radio is visible at a glance. Any other source the tracker reports
+// (e.g. wifi_nan once we add NAN decoding) gets appended automatically.
+const KNOWN_SOURCES = ['ble', 'wifi_beacon'];
 
 const fmt = {
   age(s) {
@@ -169,7 +172,9 @@ async function tick() {
     document.getElementById('messages_total').textContent = s.messages_total.toLocaleString();
     document.getElementById('cpu_temp').textContent      = s.cpu_temp_c == null ? '–' : s.cpu_temp_c + ' °C';
 
-    document.getElementById('by_source').innerHTML = SOURCES.map(src => {
+    const sources = [...KNOWN_SOURCES,
+                     ...Object.keys(s.by_source).filter(k => !KNOWN_SOURCES.includes(k))];
+    document.getElementById('by_source').innerHTML = sources.map(src => {
       const x = s.by_source[src] || { messages: 0, last_seen_s: null };
       return '<tr><td>' + src + '</td>'
            + '<td class="num">' + x.messages.toLocaleString() + '</td>'
