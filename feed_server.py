@@ -78,6 +78,15 @@ _DASHBOARD_HTML = """<!doctype html>
   .id    { color: var(--hi); }
   .empty { color: var(--muted); font-style: italic; padding: 1rem 0;
            text-align: center; }
+  .unit-toggle { display: inline-flex; gap: 2px; background: var(--rule);
+                 padding: 2px; border-radius: 4px; margin-left: auto; }
+  .unit-pill   { background: transparent; border: 0; color: var(--dim);
+                 cursor: pointer; font: inherit;
+                 padding: 0.15rem 0.55rem; border-radius: 3px;
+                 font-size: 0.7rem; letter-spacing: 0.04em; }
+  .unit-pill.active        { background: var(--card); color: var(--hi); }
+  .unit-pill:hover         { color: var(--fg); }
+  .unit-pill.active:hover  { color: var(--hi); }
   footer { margin-top: 2rem; color: var(--muted); font-size: 0.7rem; }
 </style>
 </head>
@@ -86,6 +95,10 @@ _DASHBOARD_HTML = """<!doctype html>
 <h1>drone-aware-zero
   <span id="pill" class="pill idle">…</span>
   <span id="hostname" class="host"></span>
+  <span class="unit-toggle">
+    <button id="u-imperial" class="unit-pill" onclick="setUnits('imperial')">ft·kt·°F</button>
+    <button id="u-metric"   class="unit-pill" onclick="setUnits('metric')">m·m/s·°C</button>
+  </span>
 </h1>
 
 <div class="row">
@@ -118,6 +131,39 @@ _DASHBOARD_HTML = """<!doctype html>
 // dead radio is visible at a glance. Any other source the tracker reports
 // (e.g. wifi_nan once we add NAN decoding) gets appended automatically.
 const KNOWN_SOURCES = ['ble', 'wifi_beacon'];
+
+// Unit system — display only. The feed (/data/remoteid.json) and /status are
+// always imperial / °C respectively; this just controls what the HTML shows.
+// Per-browser preference, persisted in localStorage. Default: imperial, to
+// match the feed contract that this page is just a window onto.
+let units = localStorage.getItem('units') || 'imperial';
+
+function setUnits(u) {
+  units = u;
+  localStorage.setItem('units', u);
+  syncUnitButtons();
+  tick();                  // re-render right away rather than wait for the next poll
+}
+
+function syncUnitButtons() {
+  document.getElementById('u-imperial').className =
+    'unit-pill' + (units === 'imperial' ? ' active' : '');
+  document.getElementById('u-metric').className =
+    'unit-pill' + (units === 'metric'   ? ' active' : '');
+}
+
+// All converters guard null so a missing value stays null (and renders as '–'),
+// not 0 °F or 0 m.
+const conv = {
+  alt:  v => v == null ? null : (units === 'metric'   ? v * 0.3048    : v),
+  spd:  v => v == null ? null : (units === 'metric'   ? v * 0.5144444 : v),
+  temp: v => v == null ? null : (units === 'imperial' ? v * 9/5 + 32  : v),
+};
+const lbl = {
+  alt:  () => units === 'metric'   ? 'm'   : 'ft',
+  spd:  () => units === 'metric'   ? 'm/s' : 'kt',
+  temp: () => units === 'imperial' ? '°F'  : '°C',
+};
 
 const fmt = {
   age(s) {
@@ -170,7 +216,7 @@ async function tick() {
     document.getElementById('last_seen').textContent     = s.last_seen_s == null ? 'never' : fmt.age(s.last_seen_s);
     document.getElementById('drones_active').textContent = s.drones_active;
     document.getElementById('messages_total').textContent = s.messages_total.toLocaleString();
-    document.getElementById('cpu_temp').textContent      = s.cpu_temp_c == null ? '–' : s.cpu_temp_c + ' °C';
+    document.getElementById('cpu_temp').textContent      = s.cpu_temp_c == null ? '–' : fmt.num(conv.temp(s.cpu_temp_c), 1) + ' ' + lbl.temp();
 
     const sources = [...KNOWN_SOURCES,
                      ...Object.keys(s.by_source).filter(k => !KNOWN_SOURCES.includes(k))];
@@ -189,9 +235,9 @@ async function tick() {
         + '<td class="id">' + escapeHtml(d.id) + '</td>'
         + '<td>' + (d.ua_type || '–') + '</td>'
         + '<td class="num">' + fmt.coord(d.lat) + ', ' + fmt.coord(d.lon) + '</td>'
-        + '<td class="num">' + fmt.num(d.alt_geom_ft, 0) + ' ft</td>'
-        + '<td class="num">' + fmt.num(d.agl_ft, 0) + ' ft</td>'
-        + '<td class="num">' + fmt.num(d.gs, 1) + ' kt</td>'
+        + '<td class="num">' + fmt.num(conv.alt(d.alt_geom_ft), 0) + ' ' + lbl.alt() + '</td>'
+        + '<td class="num">' + fmt.num(conv.alt(d.agl_ft), 0) + ' ' + lbl.alt() + '</td>'
+        + '<td class="num">' + fmt.num(conv.spd(d.gs), 1) + ' ' + lbl.spd() + '</td>'
         + '<td class="num">' + fmt.num(d.track, 0) + '°</td>'
         + '<td class="num">' + fmt.num(d.rssi, 0) + ' dBm</td>'
         + '<td>' + (d.rid_source || '–') + '</td>'
@@ -205,6 +251,7 @@ async function tick() {
 }
 
 document.getElementById('hostname').textContent = location.host;
+syncUnitButtons();
 tick();
 setInterval(tick, 1500);
 </script>
