@@ -118,50 +118,99 @@ def parse_basic_id(data: bytes) -> dict:
 
 
 def parse_location(data: bytes) -> dict:
+    """Parse a Location/Vector message (msg type 0x1) per ASTM F3411 (25 bytes).
+
+      byte 0:        msg_type<<4 | version    (caller has consumed)
+      byte 1:        status flags
+                       bits 0-2: Operational Status
+                       bit 3:    Height Type (0 = Above Takeoff, 1 = AGL)
+                       bit 4:    E/W Direction Segment (0 = 0-179°, 1 = 180-359°)
+                       bit 5:    Speed Multiplier (0 = ×0.25 m/s, 1 = ×0.75 m/s)
+                       bits 6-7: reserved
+      byte 2:        Direction (uint8, 0-179°; add 180° if segment bit set)
+      byte 3:        Speed Horizontal (uint8 × multiplier)
+      byte 4:        Speed Vertical (int8 × 0.5 m/s)
+      bytes 5-8:     Latitude (int32 × 1e-7°)
+      bytes 9-12:    Longitude (int32 × 1e-7°)
+      bytes 13-14:   Pressure Altitude  (uint16 × 0.5 − 1000 m)
+      bytes 15-16:   Geodetic Altitude  (uint16 × 0.5 − 1000 m)
+      bytes 17-18:   Height (AGL/takeoff) (uint16 × 0.5 − 1000 m)
+      byte 19+:      accuracies, timestamp, reserved — not decoded
+    """
     if len(data) < 25:
         return {}
-    speed_mult  = data[1] & 0x01
-    height_type = (data[1] >> 2) & 0x01
-    lat = struct.unpack_from('<i', data, 2)[0] * 1e-7
-    lon = struct.unpack_from('<i', data, 6)[0] * 1e-7
 
-    # Reject null/placeholder GPS values broadcast before lock (e.g. DJI firmware
-    # transmits lat>90 or lon>180 as a sentinel until GPS acquires).
+    height_type = (data[1] >> 3) & 0x01
+    dir_segment = (data[1] >> 4) & 0x01
+    speed_mult  = (data[1] >> 5) & 0x01
+
+    heading = float(data[2]) + (180.0 if dir_segment else 0.0)
+    speed   = data[3] * (0.75 if speed_mult else 0.25)
+    vspeed  = struct.unpack_from('<b', data, 4)[0] * 0.5
+
+    lat = struct.unpack_from('<i', data, 5)[0] * 1e-7
+    lon = struct.unpack_from('<i', data, 9)[0] * 1e-7
+
+    # Reject placeholder GPS broadcast before lock (e.g. DJI firmware transmits
+    # lat>90 or lon>180 as a sentinel until GPS acquires).
     if abs(lat) > 90.0 or abs(lon) > 180.0:
         return {}
 
-    alt_geodetic = struct.unpack_from('<H', data, 12)[0] * 0.5 - 1000.0
-    height       = struct.unpack_from('<H', data, 14)[0] * 0.5 - 1000.0
-    speed        = data[16] * (0.75 if speed_mult else 0.25)
-    vspeed       = data[17] * 0.5 - 62.0
-    heading      = struct.unpack_from('<H', data, 18)[0] * 0.01
-    return {
+    geodetic_alt = struct.unpack_from('<H', data, 15)[0] * 0.5 - 1000.0
+    height_m     = struct.unpack_from('<H', data, 17)[0] * 0.5 - 1000.0
+
+    result = {
         "latitude":       round(lat, 7),
         "longitude":      round(lon, 7),
-        "altitude_geo":   round(alt_geodetic, 1),
-        "height_agl":     round(height, 1),
         "ground_speed":   round(speed, 2),
         "vertical_speed": round(vspeed, 2),
         "heading":        round(heading, 1),
-        "height_type":    "AGL" if height_type == 0 else "Above Takeoff",
+        "height_type":    "AGL" if height_type == 1 else "Above Takeoff",
     }
+    # uint16 value 0x0000 decodes to −1000.0 m, the ODID "unknown" sentinel.
+    if geodetic_alt > -1000.0:
+        result["altitude_geo"] = round(geodetic_alt, 1)
+    if height_m > -1000.0:
+        result["height_agl"] = round(height_m, 1)
+    return result
 
 
 def parse_system_msg(data: bytes) -> dict:
-    if len(data) < 16:
+    """Parse a System message (msg type 0x4) per ASTM F3411 (25 bytes).
+
+      byte 0:        msg_type<<4 | version    (caller has consumed)
+      byte 1:        classification + operator location source
+      bytes 2-5:     Operator Latitude  (int32 × 1e-7°)
+      bytes 6-9:     Operator Longitude (int32 × 1e-7°)
+      byte 10:       Flight Area Count (uint8)
+      byte 11:       Flight Area Radius (uint8 × 10 m)
+      bytes 12-13:   Flight Area Ceiling (uint16 × 0.5 − 1000 m)
+      bytes 14-15:   Flight Area Floor   (uint16 × 0.5 − 1000 m)
+      byte 16:       UA Classification
+      bytes 17-18:   Operator Altitude / takeoff geo (uint16 × 0.5 − 1000 m)
+      bytes 19+:     timestamp, reserved — not decoded
+    """
+    if len(data) < 19:
         return {}
-    op_lat      = struct.unpack_from('<i', data, 4)[0] * 1e-7
-    op_lon      = struct.unpack_from('<i', data, 8)[0] * 1e-7
-    area_count  = data[12]
-    area_radius = data[13] * 10
-    alt_takeoff = struct.unpack_from('<H', data, 14)[0] * 0.5 - 1000.0
-    return {
-        "operator_lat":    round(op_lat, 7),
-        "operator_lon":    round(op_lon, 7),
-        "area_count":      area_count,
-        "area_radius_m":   area_radius,
-        "alt_takeoff_geo": round(alt_takeoff, 1),
+    op_lat      = struct.unpack_from('<i', data,  2)[0] * 1e-7
+    op_lon      = struct.unpack_from('<i', data,  6)[0] * 1e-7
+    area_count  = data[10]
+    area_radius = data[11] * 10
+    alt_takeoff = struct.unpack_from('<H', data, 17)[0] * 0.5 - 1000.0
+
+    result: dict = {
+        "area_count":    area_count,
+        "area_radius_m": area_radius,
     }
+    # Spec ranges: lat ∈ [-90, 90], lon ∈ [-180, 180]. Out-of-range values are
+    # placeholder/sentinel — keep them out of the feed rather than emit 152° N.
+    if abs(op_lat) <= 90.0 and abs(op_lon) <= 180.0:
+        result["operator_lat"] = round(op_lat, 7)
+        result["operator_lon"] = round(op_lon, 7)
+    # -1000.0 m is the ODID "unknown" altitude sentinel.
+    if alt_takeoff > -1000.0:
+        result["alt_takeoff_geo"] = round(alt_takeoff, 1)
+    return result
 
 
 def parse_operator_id(data: bytes) -> dict:

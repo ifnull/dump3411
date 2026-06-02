@@ -119,46 +119,68 @@ def parse_basic_id(data: bytes) -> dict:
 
 
 def parse_location(data: bytes) -> dict:
+    """Parse a Location/Vector message (msg type 0x1) per ASTM F3411.
+
+    See wifi_feeder.parse_location for the full byte-layout commentary.
+    """
     if len(data) < 25:
         return {}
-    speed_mult  = data[1] & 0x01
-    height_type = (data[1] >> 2) & 0x01
-    lat = struct.unpack_from('<i', data, 2)[0] * 1e-7
-    lon = struct.unpack_from('<i', data, 6)[0] * 1e-7
+
+    height_type = (data[1] >> 3) & 0x01
+    dir_segment = (data[1] >> 4) & 0x01
+    speed_mult  = (data[1] >> 5) & 0x01
+
+    heading = float(data[2]) + (180.0 if dir_segment else 0.0)
+    speed   = data[3] * (0.75 if speed_mult else 0.25)
+    vspeed  = struct.unpack_from('<b', data, 4)[0] * 0.5
+
+    lat = struct.unpack_from('<i', data, 5)[0] * 1e-7
+    lon = struct.unpack_from('<i', data, 9)[0] * 1e-7
+
     if abs(lat) > 90.0 or abs(lon) > 180.0:
         return {}
-    alt_geodetic = struct.unpack_from('<H', data, 12)[0] * 0.5 - 1000.0
-    height       = struct.unpack_from('<H', data, 14)[0] * 0.5 - 1000.0
-    speed        = data[16] * (0.75 if speed_mult else 0.25)
-    vspeed       = data[17] * 0.5 - 62.0
-    heading      = struct.unpack_from('<H', data, 18)[0] * 0.01
-    return {
+
+    geodetic_alt = struct.unpack_from('<H', data, 15)[0] * 0.5 - 1000.0
+    height_m     = struct.unpack_from('<H', data, 17)[0] * 0.5 - 1000.0
+
+    result = {
         "latitude":       round(lat, 7),
         "longitude":      round(lon, 7),
-        "altitude_geo":   round(alt_geodetic, 1),
-        "height_agl":     round(height, 1),
         "ground_speed":   round(speed, 2),
         "vertical_speed": round(vspeed, 2),
         "heading":        round(heading, 1),
-        "height_type":    "AGL" if height_type == 0 else "Above Takeoff",
+        "height_type":    "AGL" if height_type == 1 else "Above Takeoff",
     }
+    if geodetic_alt > -1000.0:
+        result["altitude_geo"] = round(geodetic_alt, 1)
+    if height_m > -1000.0:
+        result["height_agl"] = round(height_m, 1)
+    return result
 
 
 def parse_system_msg(data: bytes) -> dict:
-    if len(data) < 16:
+    """Parse a System message (msg type 0x4) per ASTM F3411.
+
+    See wifi_feeder.parse_system_msg for the full byte-layout commentary.
+    """
+    if len(data) < 19:
         return {}
-    op_lat      = struct.unpack_from('<i', data, 4)[0] * 1e-7
-    op_lon      = struct.unpack_from('<i', data, 8)[0] * 1e-7
-    area_count  = data[12]
-    area_radius = data[13] * 10
-    alt_takeoff = struct.unpack_from('<H', data, 14)[0] * 0.5 - 1000.0
-    return {
-        "operator_lat":    round(op_lat, 7),
-        "operator_lon":    round(op_lon, 7),
-        "area_count":      area_count,
-        "area_radius_m":   area_radius,
-        "alt_takeoff_geo": round(alt_takeoff, 1),
+    op_lat      = struct.unpack_from('<i', data,  2)[0] * 1e-7
+    op_lon      = struct.unpack_from('<i', data,  6)[0] * 1e-7
+    area_count  = data[10]
+    area_radius = data[11] * 10
+    alt_takeoff = struct.unpack_from('<H', data, 17)[0] * 0.5 - 1000.0
+
+    result: dict = {
+        "area_count":    area_count,
+        "area_radius_m": area_radius,
     }
+    if abs(op_lat) <= 90.0 and abs(op_lon) <= 180.0:
+        result["operator_lat"] = round(op_lat, 7)
+        result["operator_lon"] = round(op_lon, 7)
+    if alt_takeoff > -1000.0:
+        result["alt_takeoff_geo"] = round(alt_takeoff, 1)
+    return result
 
 
 def parse_operator_id(data: bytes) -> dict:

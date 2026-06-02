@@ -197,16 +197,22 @@ class Tracker:
                       op_lat: Optional[float], op_lon: Optional[float],
                       alt_takeoff_m: Optional[float],
                       rssi: Optional[float], rid_source: str) -> None:
-        """Decoded a System message (0x4) — operator location + takeoff alt."""
+        """Decoded a System message (0x4) — operator location + takeoff alt.
+
+        Fields are partial-updated: only overwrite when the decoder produced a
+        usable value, so a System message whose operator coords got filtered
+        by the parser (out-of-range / sentinel) does **not** wipe an earlier
+        valid operator block.
+        """
         now = time.monotonic()
         with self._lock:
             state = self._drone_for_mac(mac)
             if state is None:
                 return
             self._messages_total       += 1
-            state.op_lat                = op_lat
-            state.op_lon                = op_lon
-            state.op_alt_takeoff_m      = alt_takeoff_m
+            if op_lat is not None:        state.op_lat           = op_lat
+            if op_lon is not None:        state.op_lon           = op_lon
+            if alt_takeoff_m is not None: state.op_alt_takeoff_m = alt_takeoff_m
             state.rssi_dbm              = rssi
             state.rid_source            = rid_source
             state.message_count        += 1
@@ -215,14 +221,18 @@ class Tracker:
 
     def update_operator_id(self, *, mac: str, operator_id: str,
                            rssi: Optional[float], rid_source: str) -> None:
-        """Decoded an Operator ID message (0x5)."""
+        """Decoded an Operator ID message (0x5).
+
+        Empty operator_id is ignored — many transmitters (and the spoofer)
+        emit a blank string before the operator field is configured.
+        """
         now = time.monotonic()
         with self._lock:
             state = self._drone_for_mac(mac)
             if state is None:
                 return
             self._messages_total       += 1
-            state.operator_id           = operator_id
+            if operator_id:             state.operator_id = operator_id
             state.rssi_dbm              = rssi
             state.rid_source            = rid_source
             state.message_count        += 1
