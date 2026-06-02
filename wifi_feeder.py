@@ -297,6 +297,15 @@ def _extract_beacon_rid(body: bytes) -> bytes | None:
       Fixed parameters: 8 (timestamp) + 2 (beacon interval) + 2 (capability) = 12 bytes
       Then: IE chain — tag(1) + length(1) + value(length)
 
+    The vendor IE itself (after OUI + vendor_type) is laid out per the
+    OpenDroneID Wi-Fi Beacon transport:
+        OUI(3) + vendor_type=0x0D(1) + send_counter(1) + ODID_message(25..)
+    Note the **send counter** byte sitting between vendor_type and the ODID
+    message. Skipping only OUI+type (4 bytes) leaves the counter at the start
+    of the returned payload, which the decoder then misreads as the ODID
+    msg_type byte — every downstream field shifts by one and the uas_id grows
+    leading control bytes. Strip the counter too.
+
     Returns the ODID message (single message or Message Pack) or None.
     """
     offset = 12  # skip fixed parameters
@@ -308,8 +317,8 @@ def _extract_beacon_rid(body: bytes) -> bytes | None:
             break
         if tag_id == 221:  # Vendor Specific IE
             info = body[offset + 2: end]
-            if len(info) >= 5 and info[:3] == ASTM_OUI and info[3] == ASTM_OUI_TYPE:
-                return info[4:]
+            if len(info) >= 6 and info[:3] == ASTM_OUI and info[3] == ASTM_OUI_TYPE:
+                return info[5:]   # OUI(3) + vendor_type(1) + counter(1)
         offset = end
     return None
 
