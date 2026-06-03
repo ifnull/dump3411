@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-drone-aware-zero / droneaware.py
+dump3411 / dump3411.py
 
 Single-process orchestrator. Runs both radios (BLE + WiFi) as daemon threads
 feeding one shared in-memory ``Tracker``, plus a stdlib HTTP server that
 serves the tracker snapshot at ``/data/remoteid.json``. See FEED.md.
 
 Usage:
-    sudo python3 droneaware.py --wifi-iface wlan1 --serve 0.0.0.0:8754
+    sudo python3 dump3411.py --wifi-iface wlan1 --serve 0.0.0.0:8754
 
 The ``--serve`` flag is optional. Without it the process detects-and-journals
 exactly like the standalone feeders but maintains the in-memory cache too —
@@ -32,7 +32,7 @@ from tracker import Tracker
 from wifi_feeder import WiFiFeeder
 
 # Logging is configured (root) by the feeder modules at import time; reuse it.
-log = logging.getLogger("droneaware.main")
+log = logging.getLogger("dump3411.main")
 
 
 # -- CLI -----------------------------------------------------------------------
@@ -48,7 +48,7 @@ def _parse_addr(s: str) -> Tuple[str, int]:
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="DroneAware unified Remote ID detector + JSON feed (offline)",
+        description="dump3411 unified Remote ID detector + JSON feed (offline)",
     )
     p.add_argument(
         "--ble-adapter", default="hci0",
@@ -133,7 +133,7 @@ def main() -> None:
         time.sleep(1.5)
         if server is not None:
             server.server_close()
-        log.info("droneaware exiting")
+        log.info("dump3411 exiting")
 
 
 if __name__ == "__main__":

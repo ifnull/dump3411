@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-drone-aware-zero / feed_server.py
+dump3411 / feed_server.py
 
 Tiny stdlib HTTP server. Endpoints:
 
@@ -28,7 +28,7 @@ from typing import Tuple
 
 from tracker import Tracker
 
-log = logging.getLogger("droneaware.feed")
+log = logging.getLogger("dump3411.feed")
 
 
 # -- Status dashboard (GET /) --------------------------------------------------
@@ -40,7 +40,7 @@ _DASHBOARD_HTML = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>drone-aware-zero</title>
+<title>dump3411</title>
 <style>
   :root { --bg:#0d1117; --card:#161b22; --line:#21262d; --rule:#30363d;
           --fg:#c9d1d9; --dim:#8b949e; --muted:#6e7681; --hi:#e6edf3; }
@@ -95,7 +95,7 @@ _DASHBOARD_HTML = """<!doctype html>
 </head>
 <body>
 
-<h1>drone-aware-zero
+<h1>dump3411
   <span id="pill" class="pill idle">…</span>
   <span id="hostname" class="host"></span>
   <span class="unit-toggle">
@@ -281,7 +281,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     in :func:`make_server` so this class can be plain BaseHTTPRequestHandler."""
 
     tracker: Tracker        # filled in by make_server()
-    server_version = "drone-aware-zero/1"
+    server_version = "dump3411/1"
     sys_version    = ""     # suppress the default "Python/3.x" Server suffix
 
     def do_GET(self) -> None:
@@ -351,7 +351,7 @@ def make_server(addr: Tuple[str, int], tracker: Tracker) -> http.server.Threadin
 def serve(addr: Tuple[str, int], tracker: Tracker) -> None:
     """Build a server and block in ``serve_forever``.
 
-    This is the entry point ``droneaware.py`` uses on its main thread.
+    This is the entry point ``dump3411.py`` uses on its main thread.
     Returns when ``KeyboardInterrupt`` is raised (SIGINT) or when something
     else calls ``server.shutdown()``.
     """

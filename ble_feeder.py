@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-DroneAware BLE detector — offline Remote ID capture.
+dump3411 BLE detector — offline Remote ID capture.
 
 Listens for BLE Remote ID advertisements (ASTM F3411, service UUID 0xFFFA),
 decodes them, and prints detections to the terminal / systemd journal.
@@ -29,7 +29,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
-log = logging.getLogger("droneaware.ble")
+log = logging.getLogger("dump3411.ble")
 
 # -- Constants -----------------------------------------------------------------
 MSG_TYPE = {
@@ -329,7 +329,7 @@ class BLEFeeder:
             )
 
     async def run(self):
-        log.info(f"DroneAware BLE detector — adapter {self.adapter}")
+        log.info(f"dump3411 BLE detector — adapter {self.adapter}")
         log.info("Scanning for Remote ID broadcasts (UUID 0xFFFA)...")
 
         scanner = BleakScanner(
@@ -347,7 +347,7 @@ class BLEFeeder:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="DroneAware BLE Remote ID detector (offline)"
+        description="dump3411 BLE Remote ID detector (offline)"
     )
     parser.add_argument(
         "--adapter", default="hci0",

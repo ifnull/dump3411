@@ -1,6 +1,6 @@
 # HTTP feed: `remoteid.json`
 
-`drone-aware-zero` can serve its current detections as a JSON document over
+`dump3411` can serve its current detections as a JSON document over
 HTTP so a consumer on the LAN (e.g. the `adsb-enrich` ADS-B → Home Assistant
 service) can poll them. This is **opt-in** and additive — it does not change the
 default detect-and-print-to-journald behavior.
@@ -22,7 +22,7 @@ obligations.
 ## Running the feed
 
 ```bash
-sudo python3 droneaware.py --wifi-iface wlan1 --serve 0.0.0.0:8754
+sudo python3 dump3411.py --wifi-iface wlan1 --serve 0.0.0.0:8754
 ```
 
 Both radios run as threads inside **one** process and share a **single**

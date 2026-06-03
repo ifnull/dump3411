@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-drone-aware-zero / tracker.py
+dump3411 / tracker.py
 
 In-memory per-drone state aggregator that produces the snapshot served by the
 ``/data/remoteid.json`` HTTP feed. See FEED.md for the wire contract — this

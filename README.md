@@ -1,4 +1,4 @@
-# drone-aware-zero
+# dump3411
 
 A drone Remote ID detector for the **Raspberry Pi Zero W**. Detects nearby
 drones over BLE and WiFi, prints them to the journal, and optionally serves
@@ -48,26 +48,26 @@ ip link
 sudo ./run-offline.sh wlan1
 ```
 
-This launches `droneaware.py` with both radios and the JSON feed on port
+This launches `dump3411.py` with both radios and the JSON feed on port
 8754. Ctrl-C stops it and returns the WiFi adapter to managed mode.
 
 ### As a service (starts on boot)
 
-The service file assumes the repo lives at `/home/pi/drone-aware-zero` and
-the USB adapter is `wlan1`. Edit `droneaware.service` if either differs.
+The service file assumes the repo lives at `/home/pi/dump3411` and
+the USB adapter is `wlan1`. Edit `dump3411.service` if either differs.
 
 ```bash
-sudo cp droneaware.service /etc/systemd/system/
+sudo cp dump3411.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now droneaware
+sudo systemctl enable --now dump3411
 ```
 
 Other commands:
 
 ```bash
-sudo systemctl status droneaware       # check state
-sudo systemctl restart droneaware      # restart
-sudo systemctl disable --now droneaware # stop and remove from boot
+sudo systemctl status dump3411       # check state
+sudo systemctl restart dump3411      # restart
+sudo systemctl disable --now dump3411 # stop and remove from boot
 ```
 
 ## Status dashboard
@@ -81,7 +81,7 @@ external assets. Useful for "is the detector alive?" without ssh + journalctl.
 ## Local JSON feed
 
 When `--serve HOST:PORT` is passed (the default `run-offline.sh` and the
-service both pass `--serve 0.0.0.0:8754`), `droneaware.py` exposes:
+service both pass `--serve 0.0.0.0:8754`), `dump3411.py` exposes:
 
 ```
 GET http://<pi>:8754/data/remoteid.json
@@ -112,16 +112,16 @@ SD card:
 
 ```bash
 sudo mkdir -p /etc/systemd/journald.conf.d
-sudo cp journald-droneaware.conf /etc/systemd/journald.conf.d/
+sudo cp journald-dump3411.conf /etc/systemd/journald.conf.d/
 sudo systemctl restart systemd-journald
 ```
 
 Then view detections:
 
 ```bash
-journalctl -u droneaware -f                              # live tail
-journalctl -u droneaware --since "today"                 # by date
-journalctl -u droneaware --since "2026-05-21 09:00"      # from a time
+journalctl -u dump3411 -f                              # live tail
+journalctl -u dump3411 --since "today"                 # by date
+journalctl -u dump3411 --since "2026-05-21 09:00"      # from a time
 journalctl --disk-usage                                  # how much it's using
 ```
 
@@ -148,7 +148,7 @@ sudo python3 ble_feeder.py  --adapter hci0
 sudo python3 wifi_feeder.py --iface wlan1
 ```
 
-These do not serve the feed (only `droneaware.py` does).
+These do not serve the feed (only `dump3411.py` does).
 
 ## Testing without a real drone
 

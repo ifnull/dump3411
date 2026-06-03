@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-DroneAware WiFi detector — offline Remote ID capture.
+dump3411 WiFi detector — offline Remote ID capture.
 
 Puts a USB monitor-mode adapter (e.g. Alfa AWUS036NEH, RT3070) into monitor
 mode, hops 2.4 GHz channels 1-11, decodes Remote ID from 802.11 beacon frames
@@ -41,7 +41,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
-log = logging.getLogger("droneaware.wifi")
+log = logging.getLogger("dump3411.wifi")
 
 
 # -- Constants -----------------------------------------------------------------
@@ -391,7 +391,7 @@ def _is_nan_action(body: bytes) -> bool:
 
 # -- Monitor Mode --------------------------------------------------------------
 
-_NM_CONF = "/etc/NetworkManager/conf.d/droneaware.conf"
+_NM_CONF = "/etc/NetworkManager/conf.d/dump3411.conf"
 
 
 def _get_backhaul_iface() -> str | None:
@@ -423,7 +423,7 @@ def _set_nm_unmanaged(mac: str):
     the interface it fights monitor mode, causing zero packet capture.
     """
     nm_body = (
-        "# DroneAware — keep NetworkManager off the monitor-mode adapter.\n"
+        "# dump3411 — keep NetworkManager off the monitor-mode adapter.\n"
         "[keyfile]\n"
         f"unmanaged-devices=mac:{mac}\n"
     )
@@ -649,7 +649,7 @@ class WiFiFeeder:
         self._stop.set()
 
     def run(self):
-        log.info(f"DroneAware WiFi detector — interface {self.iface}")
+        log.info(f"dump3411 WiFi detector — interface {self.iface}")
         log.info(f"Channels: {CHANNELS_24}")
 
         set_monitor_mode(self.iface)
@@ -686,7 +686,7 @@ def _handle_sigterm(signum, frame):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="DroneAware WiFi Remote ID detector (offline)"
+        description="dump3411 WiFi Remote ID detector (offline)"
     )
     parser.add_argument(
         "--iface", default="wlan1",
