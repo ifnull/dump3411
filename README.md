@@ -1,20 +1,12 @@
 # dump3411
 
-A local-only Remote ID detector for Linux. Picks up the mandatory drone
-identification broadcasts on BLE and Wi-Fi Beacon, decodes them per
-ASTM F3411, prints them to the system journal, and serves a status dashboard
-plus a JSON feed on the LAN. Nothing leaves the host.
+A local-only Remote ID detector for Linux. Picks up the mandatory drone identification broadcasts on BLE and Wi-Fi Beacon, decodes them per ASTM F3411, prints them to the system journal, and serves a status dashboard plus a JSON feed on the LAN. Nothing leaves the host.
 
-Spiritual sibling of [dump1090](https://github.com/flightaware/dump1090)
-(ADS-B at 1090 MHz) and dump978 (UAT at 978 MHz). The `3411` is the ASTM
-standard number — Remote ID isn't tied to a single frequency the way ADS-B
-or UAT are, so a spec number is the more honest identifier.
+Spiritual sibling of [dump1090](https://github.com/flightaware/dump1090) (ADS-B at 1090 MHz) and dump978 (UAT at 978 MHz). The `3411` is the ASTM standard number — Remote ID isn't tied to a single frequency the way ADS-B or UAT are, so a spec number is the more honest identifier.
 
 ## Quickstart
 
-You'll need a Linux host with Python 3.10+, a Bluetooth adapter (built-in
-or USB), and a USB Wi-Fi adapter that supports monitor mode (Alfa AWUS036NEH
-or any Ralink RT3070-based adapter).
+You'll need a Linux host with Python 3.10+, a Bluetooth adapter (built-in or USB), and a USB Wi-Fi adapter that supports monitor mode (Alfa AWUS036NEH or any Ralink RT3070-based adapter).
 
 ```bash
 # 1. Dependencies
@@ -47,8 +39,7 @@ sudo systemctl status dump3411
 journalctl -u dump3411 -f
 ```
 
-By default the journal is volatile — wiped on reboot. To make detection
-history persist (capped at 50 MB so it can never fill the disk):
+By default the journal is volatile — wiped on reboot. To make detection history persist (capped at 50 MB so it can never fill the disk):
 
 ```bash
 sudo mkdir -p /etc/systemd/journald.conf.d
@@ -58,47 +49,31 @@ sudo systemctl restart systemd-journald
 
 ## What you'll see
 
-When a Remote-ID-compliant drone broadcasts in range, the journal logs
-each decoded message:
+When a Remote-ID-compliant drone broadcasts in range, the journal logs each decoded message:
 
 ```
 [BLE]          MAC=...  RSSI=-62dBm  Type=Basic ID         UAS-ID=1581F...
 [WiFi-Beacon]  MAC=...  RSSI=-71dBm  Type=Location/Vector  lat=40.7128 lon=-74.0060
 ```
 
-And the dashboard at `http://<host>:8754/` shows a live status pill,
-per-transport message counters, CPU temperature, and a table of currently
-tracked drones with clickable Google Maps links for both the drone position
-and the operator location. A header toggle switches the display between
-imperial (`ft·kt·°F`) and metric (`m·m/s·°C`); the wire feed stays imperial
-regardless.
+The dashboard at `http://<host>:8754/` shows a live status pill, per-transport message counters, CPU temperature, and a table of currently tracked drones with clickable Google Maps links for both the drone position and the operator location. A header toggle switches the display between imperial (`ft·kt·°F`) and metric (`m·m/s·°C`); the wire feed stays imperial regardless.
 
-If nothing's in range, the dashboard sits at IDLE and the journal stays
-quiet. That's expected — Remote ID is only broadcast by drones registered
-after September 2023, so coverage is sparse. See **[TESTING.md](./TESTING.md)**
-for how to put a transmitter on the air and confirm the whole path works.
+If nothing's in range, the dashboard sits at IDLE and the journal stays quiet. That's expected — Remote ID is only broadcast by drones registered after September 2023, so coverage is sparse. See **[TESTING.md](./TESTING.md)** for how to put a transmitter on the air and confirm the whole path works.
 
 ## Hardware
 
-Confirmed on a Raspberry Pi Zero W with an Alfa AWUS036NEH adapter. Should
-work on **any Linux host** that has:
+Confirmed on a Raspberry Pi Zero W with an Alfa AWUS036NEH adapter. Should work on **any Linux host** that has:
 
 - **A Bluetooth adapter** for BLE Remote ID. Built-in is fine.
-- **A USB Wi-Fi adapter that supports monitor mode** for Wi-Fi Beacon Remote
-  ID. The Alfa AWUS036NEH (RT3070) is what we tested. Most built-in Wi-Fi
-  cards can't reliably enter monitor mode, so a dedicated USB adapter is the
-  easy path.
+- **A USB Wi-Fi adapter that supports monitor mode** for Wi-Fi Beacon Remote ID. The Alfa AWUS036NEH (RT3070) is what we tested. Most built-in Wi-Fi cards can't reliably enter monitor mode, so a dedicated USB adapter is the easy path.
 
-On low-powered single-board hosts a powered USB hub is strongly recommended
-— the Wi-Fi adapter's current draw can brown out the SBC otherwise.
+On low-powered single-board hosts a powered USB hub is strongly recommended — the Wi-Fi adapter's current draw can brown out the SBC otherwise.
 
 ## Software
 
-- Linux with **systemd** (the included `dump3411.service` requires it;
-  `run-offline.sh` works without).
+- Linux with **systemd** (the included `dump3411.service` requires it; `run-offline.sh` works without).
 - **Python 3.10+** (uses PEP 604 `int | None` syntax).
-- Tested on Raspberry Pi OS Bookworm; any modern systemd distro with
-  Python 3.10+ should work too (Debian 12, Ubuntu 22.04+, Fedora, …).
+- Tested on Raspberry Pi OS Bookworm; any modern systemd distro with Python 3.10+ should work too (Debian 12, Ubuntu 22.04+, Fedora, …).
 - Architecture-agnostic — runs on ARMv6, ARMv7, AArch64, and x86_64.
 
 ## Configuration
@@ -124,24 +99,17 @@ Edit any of those in the service file before installing.
 
 ## Status dashboard
 
-`http://<host>:8754/` is a single self-contained HTML page (no CDN, no
-build step). It polls `/status` and `/data/remoteid.json` every 1.5 s and
-shows:
+`http://<host>:8754/` is a single self-contained HTML page (no CDN, no build step). It polls `/status` and `/data/remoteid.json` every 1.5 s and shows:
 
 - Service health pill (ACTIVE / IDLE / OFFLINE)
 - Top tiles: uptime, last-beacon age, drones active, total messages, CPU temp
 - Per-transport message counters with last-seen timestamps
-- Table of currently tracked drones — UAS-ID, type, **drone + operator
-  coordinates as Google Maps links**, altitude, AGL, ground speed, track,
-  RSSI, transport, age
+- Table of currently tracked drones — UAS-ID, type, **drone + operator coordinates as Google Maps links**, altitude, AGL, ground speed, track, RSSI, transport, age
 - Unit toggle (per-browser, persists in `localStorage`)
 
 ## JSON feed
 
-`GET http://<host>:8754/data/remoteid.json` returns the current tracker
-snapshot. The wire format is locked by **[FEED.md](./FEED.md)** — see that
-file if you're integrating a consumer (e.g. `adsb-enrich` for Home
-Assistant).
+`GET http://<host>:8754/data/remoteid.json` returns the current tracker snapshot. The wire format is locked by **[FEED.md](./FEED.md)** — see that file if you're integrating a consumer (e.g. `adsb-enrich` for Home Assistant).
 
 Quick check from any LAN host:
 
@@ -149,14 +117,11 @@ Quick check from any LAN host:
 curl -s http://<host>:8754/data/remoteid.json | python3 -m json.tool
 ```
 
-`GET /status` is also available — operational health (uptime, last beacon,
-CPU temp, per-source counters). Useful for Home Assistant binary sensors
-and uptime monitors.
+`GET /status` is also available — operational health (uptime, last beacon, CPU temp, per-source counters). Useful for Home Assistant binary sensors and uptime monitors.
 
 ## Logs
 
-The detector writes no log file of its own; under systemd its output goes
-to the journal:
+The detector writes no log file of its own; under systemd its output goes to the journal:
 
 ```bash
 journalctl -u dump3411 -f                            # live tail
@@ -168,28 +133,21 @@ Persistence is handled by the journald drop-in installed in the Quickstart.
 
 ## Standalone single-radio mode
 
-The per-radio scripts run on their own — handy when debugging one radio in
-isolation:
+The per-radio scripts run on their own — handy when debugging one radio in isolation:
 
 ```bash
 sudo python3 ble_feeder.py  --adapter hci0 --verbose
 sudo python3 wifi_feeder.py --iface wlan1  --verbose
 ```
 
-These do not serve the feed and do not update the shared tracker; only
-`dump3411.py` does. Use them only for diagnosing one radio's capture path.
+These do not serve the feed and do not update the shared tracker; only `dump3411.py` does. Use them only for diagnosing one radio's capture path.
 
 ## Notes
 
 - Run as root: raw sockets, monitor mode, and Bluetooth all require it.
-- Remote ID is only broadcast by drones registered after Sept 2023. Seeing
-  zero detections usually just means nothing compliant is in range.
-- The Wi-Fi capture parses every 802.11 management frame in Python. On
-  single-core ARMv6 hosts (Pi Zero W) that's heavy and may drop packets
-  under busy 2.4 GHz — fine for detection, not lossless. More-powerful
-  hosts will keep up easily.
-- The CPU-temp tile reads `/sys/class/thermal/thermal_zone0/temp`; on hosts
-  without that file the dashboard shows `–`.
+- Remote ID is only broadcast by drones registered after Sept 2023. Seeing zero detections usually just means nothing compliant is in range.
+- The Wi-Fi capture parses every 802.11 management frame in Python. On single-core ARMv6 hosts (Pi Zero W) that's heavy and may drop packets under busy 2.4 GHz — fine for detection, not lossless. More-powerful hosts will keep up easily.
+- The CPU-temp tile reads `/sys/class/thermal/thermal_zone0/temp`; on hosts without that file the dashboard shows `–`.
 
 ## Credit & license
 
