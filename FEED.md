@@ -33,13 +33,13 @@ standalone testing tools and do not serve the feed.
 Then from the consumer:
 
 ```
-GET http://<pi-zero-ip>:8754/data/remoteid.json
+GET http://<dump3411-host>:8754/data/remoteid.json
 ```
 
-Use stdlib `http.server` — no async, no extra deps. The Pi Zero W is ARMv6 with
-a single 1 GHz core, and the BLE/802.11 decode already saturates it. **The HTTP
-handler must only serialize a pre-built in-memory snapshot — never decode or do
-work per request.**
+Use stdlib `http.server` — no async, no extra deps. dump3411 is designed to
+run on modest hardware (a Pi Zero W is the reference target), so **the HTTP
+handler must only serialize a pre-built in-memory snapshot — never decode
+or do work per request.**
 
 ---
 

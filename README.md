@@ -1,114 +1,54 @@
 # dump3411
 
-A drone Remote ID detector for the **Raspberry Pi Zero W**. Detects nearby
-drones over BLE and WiFi, prints them to the journal, and optionally serves
-a JSON feed for LAN consumers. Fully offline — no account, no token, no
-data leaves the Pi.
+A local-only Remote ID detector for Linux. Picks up the mandatory drone
+identification broadcasts on BLE and Wi-Fi Beacon, decodes them per
+ASTM F3411, prints them to the system journal, and serves a status dashboard
+plus a JSON feed on the LAN. Nothing leaves the host.
 
-Stripped-down fork of the DroneAware node feeders: the network uplink,
-enrollment, heartbeat, GPS, and on-disk buffers have been removed.
+Spiritual sibling of [dump1090](https://github.com/flightaware/dump1090)
+(ADS-B at 1090 MHz) and dump978 (UAT at 978 MHz). The `3411` is the ASTM
+standard number — Remote ID isn't tied to a single frequency the way ADS-B
+or UAT are, so a spec number is the more honest identifier.
 
-## Hardware
+## Quickstart
 
-- **Raspberry Pi Zero W 1.1** — built-in Bluetooth handles BLE detection.
-- **USB WiFi adapter with monitor mode** — Alfa AWUS036NEH (RT3070) confirmed.
-- **micro-USB OTG adapter** to attach the WiFi adapter, ideally through a
-  **powered USB hub** (the adapter's current draw can brown out the Pi).
-
-The Pi's built-in WiFi cannot do monitor mode — that is what the USB adapter
-is for. BLE uses the built-in Bluetooth and needs no extra hardware.
-
-## OS
-
-**Raspberry Pi OS Bookworm, 32-bit Lite.** The code needs **Python 3.10+**
-(Bookworm ships 3.11). The Pi Zero W 1 is ARMv6 and cannot run 64-bit.
-
-## Install
+You'll need a Linux host with Python 3.10+, a Bluetooth adapter (built-in
+or USB), and a USB Wi-Fi adapter that supports monitor mode (Alfa AWUS036NEH
+or any Ralink RT3070-based adapter).
 
 ```bash
+# 1. Dependencies
 sudo apt update
 sudo apt install -y python3-bleak iw rfkill bluez
-```
 
-`bluez` is usually already present. The HTTP feed uses stdlib `http.server`,
-no extra deps.
+# 2. Clone
+git clone https://github.com/ifnull/dump3411.git
+cd dump3411
 
-## Run
-
-Find the USB adapter's interface name (built-in WiFi is `wlan0`; the USB
-adapter is usually `wlan1`):
-
-```bash
+# 3. Confirm your USB Wi-Fi adapter's interface name (usually wlan1)
 ip link
-```
 
-### Manually (one terminal, for testing)
+# 4. If yours isn't wlan1, or the repo isn't at /home/pi/dump3411,
+#    edit ExecStart in dump3411.service to match before the next step.
 
-```bash
-sudo ./run-offline.sh wlan1
-```
-
-This launches `dump3411.py` with both radios and the JSON feed on port
-8754. Ctrl-C stops it and returns the WiFi adapter to managed mode.
-
-### As a service (starts on boot)
-
-The service file assumes the repo lives at `/home/pi/dump3411` and
-the USB adapter is `wlan1`. Edit `dump3411.service` if either differs.
-
-```bash
+# 5. Install and start
 sudo cp dump3411.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now dump3411
+
+# 6. Open the dashboard from any LAN host
+echo "http://$(hostname -I | awk '{print $1}'):8754/"
 ```
 
-Other commands:
+Service status / live tail:
 
 ```bash
-sudo systemctl status dump3411       # check state
-sudo systemctl restart dump3411      # restart
-sudo systemctl disable --now dump3411 # stop and remove from boot
+sudo systemctl status dump3411
+journalctl -u dump3411 -f
 ```
 
-## Status dashboard
-
-Browser to **`http://drone-detector.local:8754/`** for a live status page —
-service health pill, uptime, per-transport message counters, CPU temp, and a
-table of currently tracked drones. Stdlib HTML embedded in `feed_server.py`;
-polls `/status` and `/data/remoteid.json` every 1.5 s. No build step, no
-external assets. Useful for "is the detector alive?" without ssh + journalctl.
-
-## Local JSON feed
-
-When `--serve HOST:PORT` is passed (the default `run-offline.sh` and the
-service both pass `--serve 0.0.0.0:8754`), `dump3411.py` exposes:
-
-```
-GET http://<pi>:8754/data/remoteid.json
-```
-
-A snapshot of currently-tracked drones, ~1 Hz polling cadence, intended for
-consumers like `adsb-enrich` to fold into Home Assistant. See **FEED.md** for
-the wire contract.
-
-Quick check from another LAN device:
-
-```bash
-curl -s http://drone-detector.local:8754/data/remoteid.json | jq .
-```
-
-The feed is additive — it does not change the journal logging behavior. To
-run detection-only (no feed) drop `--serve` from the command line.
-
-## Logs
-
-The detector writes no log file of its own. Under systemd its output goes
-to the journal. By default that journal is **volatile (RAM only)** and is
-wiped on reboot — so detections wouldn't survive a power cycle.
-
-To keep detection history across reboots, install the journald drop-in. It
-makes the journal persistent and caps it at 50 MB so it can never fill the
-SD card:
+By default the journal is volatile — wiped on reboot. To make detection
+history persist (capped at 50 MB so it can never fill the disk):
 
 ```bash
 sudo mkdir -p /etc/systemd/journald.conf.d
@@ -116,61 +56,141 @@ sudo cp journald-dump3411.conf /etc/systemd/journald.conf.d/
 sudo systemctl restart systemd-journald
 ```
 
-Then view detections:
-
-```bash
-journalctl -u dump3411 -f                              # live tail
-journalctl -u dump3411 --since "today"                 # by date
-journalctl -u dump3411 --since "2026-05-21 09:00"      # from a time
-journalctl --disk-usage                                  # how much it's using
-```
-
 ## What you'll see
 
-Detections print one line each:
+When a Remote-ID-compliant drone broadcasts in range, the journal logs
+each decoded message:
 
 ```
-[BLE] MAC=...  RSSI=-62dBm  Type=Basic ID  UAS-ID=1581F...
-[WiFi-Beacon] MAC=...  RSSI=-71dBm  Type=Location/Vector  lat=40.71 lon=-74.00
+[BLE]          MAC=...  RSSI=-62dBm  Type=Basic ID         UAS-ID=1581F...
+[WiFi-Beacon]  MAC=...  RSSI=-71dBm  Type=Location/Vector  lat=40.7128 lon=-74.0060
 ```
 
-A `[Heartbeat]` line every 60 seconds confirms each detector is alive and
-shows the running detection count. Add `--verbose` (or edit the service
-file) to log every decoded message type, not just Basic ID and Location.
+And the dashboard at `http://<host>:8754/` shows a live status pill,
+per-transport message counters, CPU temperature, and a table of currently
+tracked drones with clickable Google Maps links for both the drone position
+and the operator location. A header toggle switches the display between
+imperial (`ft·kt·°F`) and metric (`m·m/s·°C`); the wire feed stays imperial
+regardless.
 
-## Standalone single-radio testing
+If nothing's in range, the dashboard sits at IDLE and the journal stays
+quiet. That's expected — Remote ID is only broadcast by drones registered
+after September 2023, so coverage is sparse. See **[TESTING.md](./TESTING.md)**
+for how to put a transmitter on the air and confirm the whole path works.
 
-The per-radio scripts still run on their own — handy when debugging one
-radio in isolation:
+## Hardware
+
+Confirmed on a Raspberry Pi Zero W with an Alfa AWUS036NEH adapter. Should
+work on **any Linux host** that has:
+
+- **A Bluetooth adapter** for BLE Remote ID. Built-in is fine.
+- **A USB Wi-Fi adapter that supports monitor mode** for Wi-Fi Beacon Remote
+  ID. The Alfa AWUS036NEH (RT3070) is what we tested. Most built-in Wi-Fi
+  cards can't reliably enter monitor mode, so a dedicated USB adapter is the
+  easy path.
+
+On low-powered single-board hosts a powered USB hub is strongly recommended
+— the Wi-Fi adapter's current draw can brown out the SBC otherwise.
+
+## Software
+
+- Linux with **systemd** (the included `dump3411.service` requires it;
+  `run-offline.sh` works without).
+- **Python 3.10+** (uses PEP 604 `int | None` syntax).
+- Tested on Raspberry Pi OS Bookworm; any modern systemd distro with
+  Python 3.10+ should work too (Debian 12, Ubuntu 22.04+, Fedora, …).
+- Architecture-agnostic — runs on ARMv6, ARMv7, AArch64, and x86_64.
+
+## Configuration
+
+The default `dump3411.service` assumes:
+
+- Repository at `/home/pi/dump3411`
+- USB Wi-Fi adapter is `wlan1`
+- Feed listens on `0.0.0.0:8754`
+
+Edit any of those in the service file before installing.
+
+`dump3411.py --help` shows the full CLI:
+
+```
+--ble-adapter HCI    HCI adapter for BLE scan          (default: hci0)
+--wifi-iface IFACE   monitor-mode interface             (default: wlan1)
+--channel-dwell SEC  seconds per channel before hop     (default: 0.2)
+--serve HOST:PORT    serve /data/remoteid.json + /      (omit for journal-only)
+--ttl SECS           drop drones after N s of silence   (default: 60)
+--verbose            log every decoded message type
+```
+
+## Status dashboard
+
+`http://<host>:8754/` is a single self-contained HTML page (no CDN, no
+build step). It polls `/status` and `/data/remoteid.json` every 1.5 s and
+shows:
+
+- Service health pill (ACTIVE / IDLE / OFFLINE)
+- Top tiles: uptime, last-beacon age, drones active, total messages, CPU temp
+- Per-transport message counters with last-seen timestamps
+- Table of currently tracked drones — UAS-ID, type, **drone + operator
+  coordinates as Google Maps links**, altitude, AGL, ground speed, track,
+  RSSI, transport, age
+- Unit toggle (per-browser, persists in `localStorage`)
+
+## JSON feed
+
+`GET http://<host>:8754/data/remoteid.json` returns the current tracker
+snapshot. The wire format is locked by **[FEED.md](./FEED.md)** — see that
+file if you're integrating a consumer (e.g. `adsb-enrich` for Home
+Assistant).
+
+Quick check from any LAN host:
 
 ```bash
-sudo python3 ble_feeder.py  --adapter hci0
-sudo python3 wifi_feeder.py --iface wlan1
+curl -s http://<host>:8754/data/remoteid.json | python3 -m json.tool
 ```
 
-These do not serve the feed (only `dump3411.py` does).
+`GET /status` is also available — operational health (uptime, last beacon,
+CPU temp, per-source counters). Useful for Home Assistant binary sensors
+and uptime monitors.
 
-## Testing without a real drone
+## Logs
 
-Stand up an OpenDroneID transmitter on a separate machine so the detector
-has something to decode:
+The detector writes no log file of its own; under systemd its output goes
+to the journal:
 
-- **`opendroneid/transmitter-linux`** — the official C transmitter, runs on
-  any Linux box with a Bluetooth adapter and/or a monitor-mode WiFi card.
-- **`ArduPilot/ArduRemoteID`** — flashes an ESP32-S3 as a standalone Remote
-  ID beacon (pre-built binaries available; ~$10 of hardware).
+```bash
+journalctl -u dump3411 -f                            # live tail
+journalctl -u dump3411 --since "today"               # by date
+journalctl -u dump3411 --since "2026-06-01 09:00"    # from a time
+```
 
-Don't run the transmitter on the same Pi as the detector.
+Persistence is handled by the journald drop-in installed in the Quickstart.
+
+## Standalone single-radio mode
+
+The per-radio scripts run on their own — handy when debugging one radio in
+isolation:
+
+```bash
+sudo python3 ble_feeder.py  --adapter hci0 --verbose
+sudo python3 wifi_feeder.py --iface wlan1  --verbose
+```
+
+These do not serve the feed and do not update the shared tracker; only
+`dump3411.py` does. Use them only for diagnosing one radio's capture path.
 
 ## Notes
 
-- Run as root — raw sockets, monitor mode, and Bluetooth all require it.
+- Run as root: raw sockets, monitor mode, and Bluetooth all require it.
 - Remote ID is only broadcast by drones registered after Sept 2023. Seeing
-  zero detections usually just means nothing compliant is flying nearby.
-- WiFi capture parses every 802.11 management frame in Python. On the
-  Zero's single 1 GHz core this is heavy and may drop packets under busy
-  2.4 GHz — fine for detection, not lossless.
+  zero detections usually just means nothing compliant is in range.
+- The Wi-Fi capture parses every 802.11 management frame in Python. On
+  single-core ARMv6 hosts (Pi Zero W) that's heavy and may drop packets
+  under busy 2.4 GHz — fine for detection, not lossless. More-powerful
+  hosts will keep up easily.
+- The CPU-temp tile reads `/sys/class/thermal/thermal_zone0/temp`; on hosts
+  without that file the dashboard shows `–`.
 
 ## Credit & license
 
-Derived from the DroneAware Node feeders. See `LICENSE`.
+Derived from the DroneAware Node feeders. See [LICENSE](./LICENSE).
