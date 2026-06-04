@@ -389,6 +389,92 @@ def _is_nan_action(body: bytes) -> bool:
     return ODID_NAN_SERVICE_ID in body[:64]
 
 
+def _extract_nan_odid(body: bytes) -> bytes | None:
+    """
+    Pull the ODID payload out of a NAN Service Discovery Frame body.
+
+    NAN Public Action Frame body layout:
+        Category(1)=0x04 + Action(1)=0x09 + OUI(3) + OUI_Type(1)=0x13
+        followed by NAN attributes.
+
+    Each NAN attribute:
+        AttrID(1) + Length(2, little-endian) + Body(Length)
+
+    We walk attributes looking for the Service Descriptor Attribute (ID=3)
+    whose Service ID matches the ODID Service ID hash; from its body we
+    parse out the Service Info bytes that carry the ODID message.
+
+    Some implementations stick an extra OUI-Subtype byte between OUI_Type
+    and the first NAN attribute; try both offsets to be tolerant.
+    """
+    for start in (6, 7):
+        payload = _walk_nan_attrs(body, start)
+        if payload is not None:
+            return payload
+    return None
+
+
+def _walk_nan_attrs(body: bytes, offset: int) -> bytes | None:
+    while offset + 3 <= len(body):
+        attr_id  = body[offset]
+        attr_len = struct.unpack_from('<H', body, offset + 1)[0]
+        attr_end = offset + 3 + attr_len
+        if attr_end > len(body):
+            return None
+        if attr_id == 0x03:                 # Service Descriptor Attribute
+            payload = _parse_nan_sda(body[offset + 3: attr_end])
+            if payload is not None:
+                return payload
+        offset = attr_end
+    return None
+
+
+def _parse_nan_sda(sda: bytes) -> bytes | None:
+    """
+    Parse a NAN Service Descriptor Attribute body.
+
+    SDA layout:
+        Service ID (6)        — match against ODID_NAN_SERVICE_ID
+        Instance ID (1)
+        Requestor Instance ID (1)
+        Service Control (1)   — bit field describing which optional fields follow
+        Binding Bitmap (2)    — present if Service Control bit 6
+        Matching Filter       — 1-byte length + N bytes, if bit 2
+        Service Response Flt  — 1-byte length + N bytes, if bit 3
+        Service Info          — 1-byte length + N bytes, if bit 4 (REQUIRED for ODID)
+
+    Inside the Service Info, ODID Wi-Fi NAN mirrors BLE/Beacon: the first byte
+    is a send counter, followed by the ODID message (single message or pack).
+    We strip the counter and return the message bytes for ``decode_rid_message``.
+    """
+    if len(sda) < 9 or sda[:6] != ODID_NAN_SERVICE_ID:
+        return None
+    service_control = sda[8]
+    offset = 9
+    # Binding Bitmap (2 bytes) — present when bit 6 set.
+    if service_control & (1 << 6):
+        offset += 2
+    # Matching Filter — present when bit 2 set; 1-byte length + body.
+    if service_control & (1 << 2):
+        if offset >= len(sda):
+            return None
+        offset += 1 + sda[offset]
+    # Service Response Filter — present when bit 3 set; 1-byte length + body.
+    if service_control & (1 << 3):
+        if offset >= len(sda):
+            return None
+        offset += 1 + sda[offset]
+    # Service Info — bit 4 must be set for ODID to be carried at all.
+    if not (service_control & (1 << 4)) or offset >= len(sda):
+        return None
+    sil = sda[offset]
+    offset += 1
+    if sil < 2 or offset + sil > len(sda):
+        return None
+    # service_info[0] is the send counter; the rest is the ODID message.
+    return sda[offset + 1: offset + sil]
+
+
 # -- Monitor Mode --------------------------------------------------------------
 
 _NM_CONF = "/etc/NetworkManager/conf.d/dump3411.conf"
@@ -599,20 +685,71 @@ class WiFiFeeder:
         # ---- Wi-Fi NAN Remote ID (subtype 13 — action frame) ----
         if subtype == 13 and _is_nan_action(body):
             self.nan_count += 1
-            if self.verbose:
-                log.info(
-                    f"[WiFi-NAN] MAC={addr2}  RSSI={rssi}dBm  "
-                    f"raw={body.hex().upper()[:40]}..."
-                )
 
-    def _update_tracker(self, mac: str, mtype: str, msg: dict, rssi) -> None:
-        """Route a decoded sub-message to the appropriate Tracker.update_*."""
+            rid_payload = _extract_nan_odid(body)
+            if rid_payload is None:
+                if self.verbose:
+                    log.info(
+                        f"[WiFi-NAN] MAC={addr2}  RSSI={rssi}dBm  "
+                        f"(SDA not parsed)  raw={body.hex().upper()[:40]}..."
+                    )
+                return
+
+            decoded = decode_rid_message(rid_payload)
+            if decoded is None:
+                return
+
+            if decoded.get("message_type") == "Message Pack":
+                sub_messages = decoded.get("messages", [])
+            else:
+                sub_messages = [decoded]
+
+            # Same Basic-ID-first ordering as the beacon branch — the tracker
+            # needs the MAC → uas_id mapping in place before Location/System
+            # arrive in the same pack.
+            sub_messages = sorted(
+                sub_messages,
+                key=lambda m: 0 if m.get("message_type") == "Basic ID" else 1,
+            )
+
+            for msg in sub_messages:
+                mtype = msg.get("message_type", "?")
+                if mtype == "Location/Vector" and "latitude" not in msg:
+                    continue
+                self.count += 1
+
+                if self.tracker is not None:
+                    self._update_tracker(addr2, mtype, msg, rssi,
+                                         rid_source="wifi_nan")
+
+                if self.verbose or mtype in ("Basic ID", "Location/Vector"):
+                    uas_id = msg.get("uas_id", "")
+                    lat    = msg.get("latitude")
+                    lon    = msg.get("longitude")
+                    if uas_id:
+                        detail = f"UAS-ID={uas_id}"
+                    elif lat is not None:
+                        detail = f"lat={lat} lon={lon}"
+                    else:
+                        detail = ""
+                    log.info(
+                        f"[WiFi-NAN] MAC={addr2}  RSSI={rssi}dBm  "
+                        f"Type={mtype}  {detail}"
+                    )
+
+    def _update_tracker(self, mac: str, mtype: str, msg: dict, rssi,
+                        rid_source: str = "wifi_beacon") -> None:
+        """Route a decoded sub-message to the appropriate Tracker.update_*.
+
+        ``rid_source`` defaults to ``wifi_beacon`` so the existing beacon
+        callsite stays unchanged; the NAN branch passes ``wifi_nan``.
+        """
         if mtype == "Basic ID":
             self.tracker.update_basic_id(
                 mac=mac, uas_id=msg.get("uas_id", ""),
                 id_type_raw=msg.get("id_type_raw", 0),
                 ua_type_raw=msg.get("ua_type_raw", 0),
-                rssi=rssi, rid_source="wifi_beacon",
+                rssi=rssi, rid_source=rid_source,
             )
         elif mtype == "Location/Vector" and "latitude" in msg:
             self.tracker.update_location(
@@ -623,7 +760,7 @@ class WiFiFeeder:
                 gs_mps=msg.get("ground_speed"),
                 heading_deg=msg.get("heading"),
                 vspeed_mps=msg.get("vertical_speed"),
-                rssi=rssi, rid_source="wifi_beacon",
+                rssi=rssi, rid_source=rid_source,
             )
         elif mtype == "System":
             self.tracker.update_system(
@@ -631,12 +768,12 @@ class WiFiFeeder:
                 op_lat=msg.get("operator_lat"),
                 op_lon=msg.get("operator_lon"),
                 alt_takeoff_m=msg.get("alt_takeoff_geo"),
-                rssi=rssi, rid_source="wifi_beacon",
+                rssi=rssi, rid_source=rid_source,
             )
         elif mtype == "Operator ID":
             self.tracker.update_operator_id(
                 mac=mac, operator_id=msg.get("operator_id", ""),
-                rssi=rssi, rid_source="wifi_beacon",
+                rssi=rssi, rid_source=rid_source,
             )
 
     def _heartbeat_loop(self):

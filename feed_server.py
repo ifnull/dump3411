@@ -132,8 +132,8 @@ _DASHBOARD_HTML = """<!doctype html>
 <script>
 // Sources we actively decode into the tracker. We always show these so a
 // dead radio is visible at a glance. Any other source the tracker reports
-// (e.g. wifi_nan once we add NAN decoding) gets appended automatically.
-const KNOWN_SOURCES = ['ble', 'wifi_beacon'];
+// gets appended automatically.
+const KNOWN_SOURCES = ['ble', 'wifi_beacon', 'wifi_nan'];
 
 // Unit system — display only. The feed (/data/remoteid.json) and /status are
 // always imperial / °C respectively; this just controls what the HTML shows.

@@ -49,11 +49,12 @@ sudo systemctl restart systemd-journald
 
 ## What you'll see
 
-When a Remote-ID-compliant drone broadcasts in range, the journal logs each decoded message:
+When a Remote-ID-compliant drone broadcasts in range, the journal logs each decoded message. All three ASTM F3411 transports are decoded — BLE, Wi-Fi Beacon, and Wi-Fi NAN:
 
 ```
 [BLE]          MAC=...  RSSI=-62dBm  Type=Basic ID         UAS-ID=1581F...
 [WiFi-Beacon]  MAC=...  RSSI=-71dBm  Type=Location/Vector  lat=40.7128 lon=-74.0060
+[WiFi-NAN]     MAC=...  RSSI=-68dBm  Type=Basic ID         UAS-ID=...
 ```
 
 The dashboard at `http://<host>:8754/` shows a live status pill, per-transport message counters, CPU temperature, and a table of currently tracked drones with clickable Google Maps links for both the drone position and the operator location. A header toggle switches the display between imperial (`ft·kt·°F`) and metric (`m·m/s·°C`); the wire feed stays imperial regardless.
