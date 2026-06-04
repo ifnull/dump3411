@@ -20,6 +20,7 @@ runnable on their own for debugging a single radio in isolation.
 import argparse
 import asyncio
 import logging
+import os
 import signal
 import sys
 import threading
@@ -76,6 +77,29 @@ def _parse_args() -> argparse.Namespace:
         "--verbose", "-v", action="store_true",
         help="Log every decoded message, not just Basic ID / Location",
     )
+    # MQTT publisher — optional. Each flag falls back to an env var so the
+    # systemd unit can pull credentials from an EnvironmentFile without
+    # exposing them via `systemctl cat`.
+    p.add_argument(
+        "--mqtt-broker", default=os.environ.get("MQTT_BROKER"),
+        metavar="HOST[:PORT]",
+        help="Publish detections to an MQTT broker (e.g. mqtt.lan:1883). "
+             "Also read from $MQTT_BROKER. Requires paho-mqtt.",
+    )
+    p.add_argument(
+        "--mqtt-topic-prefix",
+        default=os.environ.get("MQTT_TOPIC_PREFIX", "dump3411"),
+        help="MQTT topic prefix (default: dump3411). "
+             "Also read from $MQTT_TOPIC_PREFIX.",
+    )
+    p.add_argument(
+        "--mqtt-user", default=os.environ.get("MQTT_USER"),
+        help="MQTT username. Also read from $MQTT_USER.",
+    )
+    p.add_argument(
+        "--mqtt-password", default=os.environ.get("MQTT_PASSWORD"),
+        help="MQTT password. Also read from $MQTT_PASSWORD.",
+    )
     return p.parse_args()
 
 
@@ -85,6 +109,32 @@ def main() -> None:
     args = _parse_args()
 
     tracker = Tracker(ttl_seconds=args.ttl)
+
+    # MQTT publisher — only built if a broker is configured. Constructed before
+    # the radios so the tracker callbacks are wired before any message arrives.
+    publisher = None
+    if args.mqtt_broker:
+        try:
+            from mqtt_publisher import MqttPublisher
+        except ImportError as e:
+            log.error("--mqtt-broker requires paho-mqtt: %s", e)
+            sys.exit(2)
+        try:
+            publisher = MqttPublisher(
+                broker=args.mqtt_broker,
+                topic_prefix=args.mqtt_topic_prefix,
+                username=args.mqtt_user,
+                password=args.mqtt_password,
+                tracker=tracker,
+            )
+        except RuntimeError as e:
+            log.error("%s", e)
+            sys.exit(2)
+        tracker.set_callbacks(
+            on_change=publisher.on_drone_change,
+            on_expire=publisher.on_drone_expire,
+        )
+
     ble  = BLEFeeder(adapter=args.ble_adapter, verbose=args.verbose,
                      tracker=tracker)
     wifi = WiFiFeeder(iface=args.wifi_iface, verbose=args.verbose,
@@ -109,6 +159,9 @@ def main() -> None:
     else:
         log.info("detection-only mode (no --serve)")
 
+    if publisher is not None:
+        publisher.start()
+
     def _handle_term(signum, _frame):
         log.info(f"signal {signum} received — shutting down")
         shutdown.set()
@@ -128,6 +181,8 @@ def main() -> None:
     finally:
         wifi.stop()
         tracker.stop()
+        if publisher is not None:
+            publisher.stop()
         # Wifi cleanup (restore_managed_mode) runs in its thread's finally.
         # Give it a moment before the process exits and kills daemon threads.
         time.sleep(1.5)

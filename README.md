@@ -119,6 +119,46 @@ curl -s http://<host>:8754/data/remoteid.json | python3 -m json.tool
 
 `GET /status` is also available — operational health (uptime, last beacon, CPU temp, per-source counters). Useful for Home Assistant binary sensors and uptime monitors.
 
+## MQTT publisher
+
+dump3411 can publish detections to an MQTT broker so consumers (Home Assistant automations, Node-RED, custom scripts) react without polling the JSON feed. Optional — only active when `--mqtt-broker` is configured.
+
+Install the client lib:
+
+```bash
+sudo apt install -y python3-paho-mqtt
+```
+
+Configure via env vars (the service unit reads `/etc/dump3411.env` if it exists):
+
+```bash
+# /etc/dump3411.env
+MQTT_BROKER=mqtt.lan:1883
+MQTT_TOPIC_PREFIX=dump3411
+MQTT_USER=dump3411
+MQTT_PASSWORD=<your-password>
+```
+
+Then `sudo systemctl restart dump3411`. The same flags work on the CLI for manual runs: `--mqtt-broker`, `--mqtt-topic-prefix`, `--mqtt-user`, `--mqtt-password`.
+
+Topic layout (under the configured prefix, default `dump3411`):
+
+| Topic | QoS | Retained | Content |
+|---|:--:|:--:|---|
+| `<prefix>/online` | 1 | yes | `"online"` on connect; LWT publishes `"offline"` if dump3411 dies |
+| `<prefix>/status` | 1 | yes | `GET /status` JSON, refreshed every ~5 s |
+| `<prefix>/drones/<uas_id>` | 1 | yes | per-drone state (same shape as one row of `drones[]` in the JSON feed), latest-wins, debounced 1 Hz |
+| `<prefix>/drones/<uas_id>` | 1 | yes | **empty payload** when a drone TTL-evicts — subscribers see the removal |
+| `<prefix>/events/detection` | 0 | no | one publish per decoded message: `{uas_id, rid_source, rssi, t}` |
+
+Units mirror FEED.md (imperial). The retained per-drone topic means a fresh HA restart immediately sees the current airspace. The `events/detection` stream is for automations that want to react on every beacon.
+
+Quick LAN-side check after configuring:
+
+```bash
+mosquitto_sub -h mqtt.lan -t 'dump3411/#' -v
+```
+
 ## Logs
 
 The detector writes no log file of its own; under systemd its output goes to the journal:

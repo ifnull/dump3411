@@ -40,9 +40,12 @@ that pack, so the MAC mapping is in place when ``update_location`` /
 """
 
 import dataclasses
+import logging
 import threading
 import time
-from typing import Optional
+from typing import Callable, Optional
+
+log = logging.getLogger("dump3411.tracker")
 
 
 # -- Unit conversions ----------------------------------------------------------
@@ -144,7 +147,9 @@ class Tracker:
     Basic ID carries the UAS ID on the wire. See FEED.md.
     """
 
-    def __init__(self, ttl_seconds: float = 60.0):
+    def __init__(self, ttl_seconds: float = 60.0,
+                 on_change: Optional[Callable[[str, dict], None]] = None,
+                 on_expire: Optional[Callable[[str], None]] = None):
         self._lock = threading.Lock()
         self._drones: dict[str, DroneState] = {}    # uas_id -> state
         self._mac_to_uas: dict[str, str] = {}       # mac    -> uas_id
@@ -154,6 +159,37 @@ class Tracker:
         # Per-source rolling stats for the /status dashboard endpoint.
         self._by_source: dict[str, dict] = {}       # rid_source -> {messages, last_seen}
         self._boot_mono = time.monotonic()
+        # Sink hooks. Fired inside the cache lock right after a successful
+        # mutation, so they MUST be fast and non-blocking — `queue.put_nowait`
+        # is the canonical pattern. See `MqttPublisher` for the reference
+        # consumer.
+        self._on_change = on_change
+        self._on_expire = on_expire
+
+    def set_callbacks(self, *,
+                      on_change: Optional[Callable[[str, dict], None]] = None,
+                      on_expire: Optional[Callable[[str], None]] = None) -> None:
+        """Wire callbacks after construction; lets us break the publisher-
+        needs-tracker / tracker-needs-callbacks chicken-and-egg."""
+        self._on_change = on_change
+        self._on_expire = on_expire
+
+    def _fire_change(self, state: "DroneState", now_mono: float) -> None:
+        """Build the consumer-units row and fire on_change. Lock must be held."""
+        if self._on_change is None:
+            return
+        try:
+            self._on_change(state.uas_id, self._row_for(state, now_mono))
+        except Exception:
+            log.exception("on_change callback raised for %s", state.uas_id)
+
+    def _fire_expire(self, uas_id: str) -> None:
+        if self._on_expire is None:
+            return
+        try:
+            self._on_expire(uas_id)
+        except Exception:
+            log.exception("on_expire callback raised for %s", uas_id)
 
     # -- updates ---------------------------------------------------------------
 
@@ -179,6 +215,7 @@ class Tracker:
             state.rssi_dbm       = rssi
             state.rid_source     = rid_source
             self._mac_to_uas[mac] = uas_id
+            self._fire_change(state, now)
 
     def update_location(self, *, mac: str,
                         lat: float, lon: float,
@@ -206,6 +243,7 @@ class Tracker:
             state.message_count += 1
             state.last_seen      = now
             state.last_pos_seen  = now
+            self._fire_change(state, now)
 
     def update_system(self, *, mac: str,
                       op_lat: Optional[float], op_lon: Optional[float],
@@ -233,6 +271,7 @@ class Tracker:
             state.message_count        += 1
             state.last_seen             = now
             state.last_operator_seen    = now
+            self._fire_change(state, now)
 
     def update_operator_id(self, *, mac: str, operator_id: str,
                            rssi: Optional[float], rid_source: str) -> None:
@@ -254,6 +293,7 @@ class Tracker:
             state.message_count        += 1
             state.last_seen             = now
             state.last_operator_seen    = now
+            self._fire_change(state, now)
 
     # -- helpers (lock must be held) ------------------------------------------
 
@@ -378,6 +418,11 @@ class Tracker:
             dead_macs = [m for m, uas in self._mac_to_uas.items() if uas not in self._drones]
             for m in dead_macs:
                 del self._mac_to_uas[m]
+        # Fire expire callbacks OUTSIDE the lock — the publisher may want to
+        # publish a retained-clear immediately, and we don't want that round-trip
+        # to be on the lock's critical path.
+        for uas in stale:
+            self._fire_expire(uas)
 
     def stop(self) -> None:
         self._stop.set()
