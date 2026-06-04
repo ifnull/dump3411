@@ -1,10 +1,10 @@
 # HTTP feed: `remoteid.json`
 
-`dump3411` can serve its current detections as a JSON document over HTTP so a consumer on the LAN (e.g. the `adsb-enrich` ADS-B → Home Assistant service) can poll them. This is **opt-in** and additive — it does not change the default detect-and-print-to-journald behavior.
+`dump3411` can serve its current detections as a JSON document over HTTP so a consumer on the LAN (e.g. [`ha-airspace`](https://github.com/ifnull/ha-airspace), the Home Assistant airspace integration that also ingests ADS-B) can poll them. This is **opt-in** and additive — it does not change the default detect-and-print-to-journald behavior.
 
 > **This is not `aircraft.json`.** Drones are not manned aircraft and this feed is not meant for dump1090-family tools. It borrows dump1090's *envelope idioms* (`now`, `seen`, a polled array) only because the intended consumer already understands them. The object schema is purpose-built for ASTM F3411 Remote ID — including operator location, UAS ID type, and native AGL, which dump1090 has no fields for.
 
-**The canonical contract lives in the consumer repo** (`adsb-enrich/FEED.md`). If this file and that one ever disagree, that one wins. This file restates the contract so the detector repo is self-contained, and adds the producer-side obligations.
+**The canonical contract lives in the consumer repo** (`ha-airspace/FEED.md`). If this file and that one ever disagree, that one wins. This file restates the contract so the detector repo is self-contained, and adds the producer-side obligations.
 
 ---
 
@@ -84,7 +84,7 @@ A detection with no `lat`/`lon` is valid (Basic ID heard before GPS lock). Keep 
 
 ## Versioning
 
-`schema_version` is one integer. Adding optional fields is backward-compatible and does **not** bump it (consumers ignore unknown fields). Removing/repurposing a field or changing units/semantics bumps the major and is coordinated with `adsb-enrich`. Keep this table and the canonical one in sync.
+`schema_version` is one integer. Adding optional fields is backward-compatible and does **not** bump it (consumers ignore unknown fields). Removing/repurposing a field or changing units/semantics bumps the major and is coordinated with `ha-airspace`. Keep this table and the canonical one in sync.
 
 | Version | Change |
 |---|---|

@@ -109,7 +109,7 @@ Edit any of those in the service file before installing.
 
 ## JSON feed
 
-`GET http://<host>:8754/data/remoteid.json` returns the current tracker snapshot. The wire format is locked by **[FEED.md](./FEED.md)** — see that file if you're integrating a consumer (e.g. `adsb-enrich` for Home Assistant).
+`GET http://<host>:8754/data/remoteid.json` returns the current tracker snapshot. The wire format is locked by **[FEED.md](./FEED.md)** — see that file if you're integrating a consumer (e.g. [`ha-airspace`](https://github.com/ifnull/ha-airspace), the Home Assistant airspace integration).
 
 Quick check from any LAN host:
 

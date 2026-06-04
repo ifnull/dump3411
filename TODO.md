@@ -32,15 +32,15 @@ dump3411/events/expired                      one publish when a drone TTL-evicts
 
 - One snapshot publish per N seconds vs publish-on-change? (Probably per-change with a debounce — drones broadcast multiple times per second.)
 - QoS 0 (fire-and-forget) is right for events; QoS 1 (at-least-once) might be right for the retained state.
-- Should we mirror the FEED.md schema (imperial units) or use SI on MQTT? FEED.md is locked imperial for adsb-enrich; MQTT consumers tend to expect SI. Worth a separate decision.
+- Should we mirror the FEED.md schema (imperial units) or use SI on MQTT? FEED.md is locked imperial for `ha-airspace`; MQTT consumers tend to expect SI. Worth a separate decision.
 
 ## Other parked ideas
 
 ### Persistent detection history
 Append every decoded detection to a rolling SQLite log (size-capped). Lets the dashboard show "what flew over today/yesterday/this week" and survives reboots in a structured form (vs the journal's text-only history).
 
-### Wire `adsb-enrich` end-to-end
-The FEED.md contract is in place; actually plumb the Pi → adsb-enrich → Home Assistant path with live data and confirm the round-trip.
+### Wire [`ha-airspace`](https://github.com/ifnull/ha-airspace) end-to-end
+The FEED.md contract is in place; actually plumb the Pi → `ha-airspace` → Home Assistant path with live data and confirm the round-trip.
 
 ### Validate against a spec-compliant transmitter
 Flash an ESP32-S3 with `ArduPilot/ArduRemoteID`. Closes the trust gap the spoofer's encoding quirks (`gs` 3×, `track` mod 180°) leave open. ~$10–15 of hardware.
