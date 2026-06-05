@@ -192,4 +192,4 @@ These do not serve the feed and do not update the shared tracker; only `dump3411
 
 ## Credit & license
 
-Derived from the DroneAware Node feeders. See [LICENSE](./LICENSE).
+Inspired by the [DroneAware Node feeders](https://droneaware.io/). If you are looking for a user friendly experience, take a look at that project. See [LICENSE](./LICENSE).
