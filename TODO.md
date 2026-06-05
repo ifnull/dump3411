@@ -20,3 +20,29 @@ Flash an ESP32-S3 with `ArduPilot/ArduRemoteID`. Closes the trust gap the spoofe
 
 ### Extract shared decoder
 `ble_feeder.py` and `wifi_feeder.py` each carry their own copy of `parse_basic_id` / `parse_location` / `parse_system_msg` / `parse_operator_id` / `decode_rid_message`. Refactor to a shared `odid_decoder.py` so the next spec fix is a one-file change.
+
+## Considered and declined
+
+Items we evaluated and decided against, with the reasoning recorded so we don't re-litigate the same call later. Each entry should also note what would change the decision.
+
+### DJI DroneID via Software-Defined Radio  *(2026-06-05)*
+
+Adding a sidecar receiver for DJI's proprietary OcuSync DroneID broadcast — the signal Aeroscope decodes. Reference implementation: [RUB-SysSec/DroneSecurity](https://github.com/RUB-SysSec/DroneSecurity); paper: Schiller et al., *Drone Security and the Mysterious Case of DJI's DroneID*, [NDSS '23](https://www.ndss-symposium.org/wp-content/uploads/2023/02/ndss2023_f217_paper.pdf).
+
+**Why declined:**
+
+1. **RTL-SDR can't do this.** DroneID is a 15.36 MHz OFDM signal at 2.4 GHz / 5.7 GHz. RTL-SDR's ~2.4 MHz instantaneous bandwidth and E4000-tuner 2.2 GHz ceiling disqualify it twice over. Would need a HackRF / PlutoSDR / LimeSDR / B205-mini — ~$250 minimum, ~$1500 for the paper's setup.
+2. **Pi Zero W can't decode it.** OFDM demod + descrambling + turbo decode at 50 MHz sample rate needs NUC-class CPU, not a single-core ARMv6.
+3. **Range is ~10 m** per the paper's own results — practically worse than the BLE/Wi-Fi RID coverage dump3411 already gets.
+4. **DJI-only.** Doesn't help with Skydio, Autel, Parrot, Yuneec, ArduPilot-based airframes, etc.
+5. **Shrinking target.** Post-Sept 2023 DJI drones broadcast ASTM F3411 RID natively (already decoded here). Pre-RID DJIs are the long tail and the FAA is gradually retrofitting them via broadcast modules.
+6. **Cheaper alternative for the airframe we actually own.** A ~$200 Dronetag Beacon clipped to the Phantom 4 Pro satisfies FAA Part 89 and gives dump3411 a native F3411 signal at full BLE/Wi-Fi range — no SDR pipeline.
+7. **Authors' own caveat.** Their README explicitly: *"not optimized … not meant for productive, reliable localization"* — it's an academic artifact.
+
+**What would change this call:**
+
+- A specific local DJI-detection use case appears (e.g. a recurring drone in the airspace whose owner isn't using a broadcast module).
+- A lightweight SDR-based DroneID receiver lands that runs on Pi-class hardware (FPGA-accelerated frontend, etc.).
+- A wideband SDR is already in the rack for unrelated reasons, making the marginal cost near-zero.
+
+Until any of those is true, stay focused on the open-standard F3411 path — which is the regulatory direction the airspace is moving in regardless.
