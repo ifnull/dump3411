@@ -46,3 +46,18 @@ Adding a sidecar receiver for DJI's proprietary OcuSync DroneID broadcast — th
 - A wideband SDR is already in the rack for unrelated reasons, making the marginal cost near-zero.
 
 Until any of those is true, stay focused on the open-standard F3411 path — which is the regulatory direction the airspace is moving in regardless.
+
+### FAA RID lookup (UAS serial → make / model)  *(2026-06-11)*
+
+Enrich detected drones with manufacturer + model from the FAA Remote ID registry. Reference implementation: [jlrjr/faa-rid-lookup](https://github.com/jlrjr/faa-rid-lookup) — bundles a local SQLite cache built from the FAA's public API (~3,900 exact serials + ~250 ranges) with optional online fallback.
+
+**Why declined here:**
+
+1. **dump3411 is a thin producer.** It pulls RID off the wire, decodes per ASTM F3411, serves a snapshot per FEED.md. External-registry enrichment is a different concern with its own operational tail (DB freshness, FAA API rate limits, online-fallback policy).
+2. **The dashboard is "is the receiver working?", not the rich drone view.** A bare UAS ID is sufficient for verifying detection. The make/model belongs where drone data is actually consumed.
+3. **FEED.md stays clean.** Producing `id` + `id_type` keeps the wire contract on "what came over the air"; baking enrichment fields into the producer would force the schema (and every consumer) to evolve every time a new enrichment source shows up.
+4. **Resolution: `ha-airspace` handles it.** That project already is the enrichment layer for ADS-B; RID lookup is exact symmetry — same DB-update cadence, same Home Assistant audience.
+
+**What would change this call:**
+
+- A lightweight static map of CTA-2063-A manufacturer codes (first 4 chars → vendor name from ICAO's MFR registry, ~50 entries) might land in dump3411 later if a "manufacturer hint" in the dashboard turns out to be useful. That's a ~30-line const, no DB, no network, no schema change — not a registry lookup, just a vendor-name annotation. Skipping it for now.
