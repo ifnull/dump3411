@@ -24,6 +24,7 @@ line per consumer poll).
 import http.server
 import json
 import logging
+import time
 import urllib.parse
 from typing import Tuple
 
@@ -82,6 +83,8 @@ _DASHBOARD_HTML = """<!doctype html>
   .maplink { color: inherit; text-decoration: none;
              border-bottom: 1px dotted var(--rule); }
   .maplink:hover { color: var(--hi); border-bottom-color: var(--dim); }
+  .live-badge { color: #4caf50; font-size: 0.65rem; margin-left: 0.35rem;
+                vertical-align: middle; letter-spacing: 0.04em; }
   .unit-toggle { display: inline-flex; gap: 2px; background: var(--rule);
                  padding: 2px; border-radius: 4px; margin-left: auto; }
   .unit-pill   { background: transparent; border: 0; color: var(--dim);
@@ -128,6 +131,15 @@ _DASHBOARD_HTML = """<!doctype html>
   <tbody id="drones"><tr><td class="empty" colspan="12">no drones currently in range</td></tr></tbody>
 </table>
 
+<h2 id="recent-heading" style="display: none;">Recent detections (last 24 h)</h2>
+<table id="recent-table" style="display: none;">
+  <thead><tr>
+    <th>UAS-ID</th><th>Type</th><th>Description</th>
+    <th>First seen</th><th>Last seen</th><th>Messages</th>
+  </tr></thead>
+  <tbody id="recent"><tr><td class="empty" colspan="6">no recent detections</td></tr></tbody>
+</table>
+
 <footer>Polls /status and /data/remoteid.json every 1.5 s &middot; FEED.md is the wire contract.</footer>
 
 <script>
@@ -135,6 +147,11 @@ _DASHBOARD_HTML = """<!doctype html>
 // dead radio is visible at a glance. Any other source the tracker reports
 // gets appended automatically.
 const KNOWN_SOURCES = ['ble', 'wifi_beacon', 'wifi_nan'];
+
+// Recent-detections state — updated by tick() and loadRecent().
+let liveUasIds     = new Set();    // set of UAS-IDs in the live tracker
+let lastRecentLoad = 0;            // wall-clock ms throttle for /history/recent.json
+const RECENT_INTERVAL_MS = 30000;
 
 // Unit system — display only. The feed (/data/remoteid.json) and /status are
 // always imperial / °C respectively; this just controls what the HTML shows.
@@ -213,6 +230,45 @@ function setPill(text, klass) {
   p.className = 'pill ' + klass;
 }
 
+function maybeLoadRecent() {
+  // Throttle so the dashboard's main 1.5 s tick doesn't beat on the DB.
+  const now = Date.now();
+  if (now - lastRecentLoad < RECENT_INTERVAL_MS) return;
+  lastRecentLoad = now;
+  loadRecent();
+}
+
+async function loadRecent() {
+  let data;
+  try {
+    const r = await fetch('/history/recent.json', { cache: 'no-store' });
+    if (!r.ok) return;
+    data = await r.json();
+  } catch (e) { return; }
+  const tbody = document.getElementById('recent');
+  const drones = data.drones || [];
+  if (drones.length === 0) {
+    tbody.innerHTML = '<tr><td class="empty" colspan="6">no detections in the last 24 hours</td></tr>';
+    return;
+  }
+  const now = data.now || (Date.now() / 1000);
+  tbody.innerHTML = drones.map(d => {
+    const live = liveUasIds.has(d.uas_id);
+    return '<tr>'
+      + '<td class="id">'
+      +   '<a class="maplink" href="/map?uas_id=' + encodeURIComponent(d.uas_id)
+      +     '" target="_blank" rel="noopener noreferrer">' + escapeHtml(d.uas_id) + '</a>'
+      +   (live ? ' <span class="live-badge">● live</span>' : '')
+      + '</td>'
+      + '<td>' + (d.ua_type || '–') + '</td>'
+      + '<td>' + (d.self_id ? escapeHtml(d.self_id) : '–') + '</td>'
+      + '<td class="num">' + fmt.age(now - d.first_seen) + ' ago</td>'
+      + '<td class="num">' + fmt.age(now - d.last_seen)  + ' ago</td>'
+      + '<td class="num">' + d.messages.toLocaleString() + '</td>'
+      + '</tr>';
+  }).join('');
+}
+
 async function tick() {
   try {
     const [s, f] = await Promise.all([
@@ -246,6 +302,10 @@ async function tick() {
       drones.innerHTML = '<tr><td class="empty" colspan="12">no drones currently in range</td></tr>';
     } else {
       const historyEnabled = !!s.history_enabled;
+      liveUasIds = new Set(f.drones.map(d => d.id));
+      document.getElementById('recent-heading').style.display = historyEnabled ? '' : 'none';
+      document.getElementById('recent-table').style.display   = historyEnabled ? '' : 'none';
+      if (historyEnabled) maybeLoadRecent();
       drones.innerHTML = f.drones.map(d => '<tr>'
         + '<td class="id">'
         + (historyEnabled
@@ -493,11 +553,38 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             if self.history is None:
                 raise KeyError(path)
             return self._history_json(path), "application/json"
+        if bare == "/history/recent.json":
+            if self.history is None:
+                raise KeyError(path)
+            return self._history_recent(path), "application/json"
         if bare == "/map":
             if self.history is None:
                 raise KeyError(path)
             return _MAP_HTML, "text/html; charset=utf-8"
         raise KeyError(path)
+
+    def _history_recent(self, path: str) -> bytes:
+        """Build the /history/recent.json response: a list of drones seen
+        recently with summary stats. Polled by the dashboard's
+        Recent detections section on a slower cadence than the live feed."""
+        q = path.split("?", 1)[1] if "?" in path else ""
+        params: dict = {}
+        for part in q.split("&"):
+            if "=" in part:
+                k, v = part.split("=", 1)
+                params[k] = urllib.parse.unquote_plus(v)
+        since = float(params["since"]) if params.get("since") else None
+        try:
+            limit = int(params.get("limit") or 50)
+        except ValueError:
+            limit = 50
+        rows = self.history.query_recent_drones(since=since, limit=limit)
+        doc = {
+            "now":    round(time.time(), 1),
+            "since":  since if since is not None else round(time.time() - 86400, 1),
+            "drones": rows,
+        }
+        return json.dumps(doc, separators=(",", ":")).encode("utf-8")
 
     def _history_json(self, path: str) -> bytes:
         """Build the /history.json response for a query."""

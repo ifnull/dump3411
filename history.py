@@ -283,6 +283,46 @@ class HistoryWriter:
         finally:
             c.close()
 
+    def query_recent_drones(self, since: Optional[float] = None,
+                            limit: int = 50) -> list[dict]:
+        """Summary rows for drones seen within the time window, most recently
+        seen first. Used by ``/history/recent.json`` for the dashboard's
+        Recent detections section. ``since`` defaults to 24 h ago.
+
+        Each row carries first_seen / last_seen / messages plus the latest
+        id_type / ua_type / self_id seen for the drone (since identity
+        fields are write-once on the wire but `self_id` can roll over the
+        course of a long flight).
+        """
+        if since is None:
+            since = time.time() - 86400.0
+        c = self._read_conn()
+        try:
+            rows = c.execute(
+                """
+                SELECT
+                  d.uas_id,
+                  MIN(d.ts)   AS first_seen,
+                  MAX(d.ts)   AS last_seen,
+                  COUNT(*)    AS messages,
+                  (SELECT id_type FROM detections
+                    WHERE uas_id = d.uas_id ORDER BY ts DESC LIMIT 1) AS id_type,
+                  (SELECT ua_type FROM detections
+                    WHERE uas_id = d.uas_id ORDER BY ts DESC LIMIT 1) AS ua_type,
+                  (SELECT self_id FROM detections
+                    WHERE uas_id = d.uas_id ORDER BY ts DESC LIMIT 1) AS self_id
+                FROM detections d
+                WHERE d.ts >= ?
+                GROUP BY d.uas_id
+                ORDER BY last_seen DESC
+                LIMIT ?
+                """,
+                (since, limit),
+            ).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            c.close()
+
     def query_drone_meta(self, uas_id: str) -> Optional[dict]:
         """Return latest id_type / ua_type / self_id seen for this drone."""
         c = self._read_conn()

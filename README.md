@@ -177,7 +177,9 @@ HISTORY_DEBOUNCE_S=1.0       # default 1.0; per-drone min write spacing
 When history is enabled:
 
 - Every UAS-ID in the dashboard becomes a clickable link to **`/map?uas_id=<ID>`** — a self-contained Leaflet page showing the operator location (blue marker) and the drone's full track (red polyline with per-point markers, click each for timestamp, altitude, AGL, speed, track, RSSI, transport).
-- **`GET /history.json?uas_id=<ID>&since=<epoch>&until=<epoch>`** returns the same data as JSON. `since`/`until` are optional.
+- The dashboard gets a **Recent detections** table below the live Drones section, listing UAS-IDs seen in the last 24 hours with type, description, first/last seen, message count, and a `● live` badge next to anything currently in the live tracker. Polled on a 30 s cadence — much slower than the 1.5 s live data. Same hyperlink behavior: click a UAS-ID to open its map.
+- **`GET /history.json?uas_id=<ID>&since=<epoch>&until=<epoch>`** returns the same data as JSON for one drone. `since`/`until` are optional.
+- **`GET /history/recent.json?since=<epoch>&limit=<N>`** lists recently-seen drones (defaults: last 24 h, 50 most recent).
 - **`GET /status`** gains a `history_enabled: true` flag plus `history: { rows, drones, size_bytes, earliest_ts, latest_ts }`.
 
 When history is **not** configured, `/map` and `/history.json` return 404 and the dashboard renders UAS-IDs as plain text — no UI surprises.
