@@ -279,14 +279,17 @@ class BLEFeeder:
                 self._update_tracker(mac, mtype, msg, adv.rssi)
 
             # Existing journald logging — unchanged.
-            if self.verbose or mtype in ("Basic ID", "Location/Vector"):
+            if self.verbose or mtype in ("Basic ID", "Location/Vector", "Self ID"):
                 uas_id = msg.get("uas_id", "")
                 lat    = msg.get("latitude")
                 lon    = msg.get("longitude")
+                desc   = msg.get("description")
                 if uas_id:
                     detail = f"UAS-ID={uas_id}"
                 elif lat is not None:
                     detail = f"lat={lat} lon={lon}"
+                elif desc:
+                    detail = f'Description="{desc}"'
                 else:
                     detail = ""
                 log.info(

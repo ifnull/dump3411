@@ -222,6 +222,24 @@ def parse_operator_id(data: bytes) -> dict:
     }
 
 
+def parse_self_id(data: bytes) -> dict:
+    """Parse a Self-ID message (msg type 0x3) per ASTM F3411 (25 bytes).
+
+      byte 0:        msg_type<<4 | version    (caller has consumed)
+      byte 1:        Description Type (0 = text, 1 = emergency, 2 = extended)
+      bytes 2-24:    Description (23 bytes ASCII, null-padded)
+
+    Free-text "purpose of flight" string. Common examples: "Search and
+    Rescue", "Photography Lesson", "Flight Training", "Pipeline Survey".
+    """
+    if len(data) < 25:
+        return {}
+    return {
+        "description_type": data[1],
+        "description":      data[2:25].rstrip(b'\x00').decode('ascii', errors='replace'),
+    }
+
+
 def parse_message_pack(data: bytes) -> list:
     if len(data) < 3:
         return []
@@ -246,6 +264,8 @@ def decode_rid_message(raw_bytes: bytes) -> dict | None:
         result.update(parse_basic_id(raw_bytes))
     elif msg_type == 0x1:
         result.update(parse_location(raw_bytes))
+    elif msg_type == 0x3:
+        result.update(parse_self_id(raw_bytes))
     elif msg_type == 0x4:
         result.update(parse_system_msg(raw_bytes))
     elif msg_type == 0x5:
@@ -666,14 +686,17 @@ class WiFiFeeder:
                 if self.tracker is not None:
                     self._update_tracker(addr2, mtype, msg, rssi)
 
-                if self.verbose or mtype in ("Basic ID", "Location/Vector"):
+                if self.verbose or mtype in ("Basic ID", "Location/Vector", "Self ID"):
                     uas_id = msg.get("uas_id", "")
                     lat    = msg.get("latitude")
                     lon    = msg.get("longitude")
+                    desc   = msg.get("description")
                     if uas_id:
                         detail = f"UAS-ID={uas_id}"
                     elif lat is not None:
                         detail = f"lat={lat} lon={lon}"
+                    elif desc:
+                        detail = f'Description="{desc}"'
                     else:
                         detail = ""
                     log.info(
@@ -688,11 +711,15 @@ class WiFiFeeder:
 
             rid_payload = _extract_nan_odid(body)
             if rid_payload is None:
-                if self.verbose:
-                    log.info(
-                        f"[WiFi-NAN] MAC={addr2}  RSSI={rssi}dBm  "
-                        f"(SDA not parsed)  raw={body.hex().upper()[:40]}..."
-                    )
+                # NAN Service ID matched but the SDA didn't parse to an ODID
+                # payload. Always log this so that when the first real-world
+                # NAN-broadcasting drone shows up and our spec interpretation
+                # is slightly off, we have hex evidence to fix the parser.
+                log.warning(
+                    f"[WiFi-NAN] MAC={addr2}  RSSI={rssi}dBm  "
+                    f"matched NAN Service ID but SDA didn't parse; "
+                    f"body[:80]={body.hex().upper()[:160]}"
+                )
                 return
 
             decoded = decode_rid_message(rid_payload)
@@ -722,14 +749,17 @@ class WiFiFeeder:
                     self._update_tracker(addr2, mtype, msg, rssi,
                                          rid_source="wifi_nan")
 
-                if self.verbose or mtype in ("Basic ID", "Location/Vector"):
+                if self.verbose or mtype in ("Basic ID", "Location/Vector", "Self ID"):
                     uas_id = msg.get("uas_id", "")
                     lat    = msg.get("latitude")
                     lon    = msg.get("longitude")
+                    desc   = msg.get("description")
                     if uas_id:
                         detail = f"UAS-ID={uas_id}"
                     elif lat is not None:
                         detail = f"lat={lat} lon={lon}"
+                    elif desc:
+                        detail = f'Description="{desc}"'
                     else:
                         detail = ""
                     log.info(
@@ -773,6 +803,11 @@ class WiFiFeeder:
         elif mtype == "Operator ID":
             self.tracker.update_operator_id(
                 mac=mac, operator_id=msg.get("operator_id", ""),
+                rssi=rssi, rid_source=rid_source,
+            )
+        elif mtype == "Self ID":
+            self.tracker.update_self_id(
+                mac=mac, description=msg.get("description", ""),
                 rssi=rssi, rid_source=rid_source,
             )
 

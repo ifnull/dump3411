@@ -6,6 +6,8 @@ Things that aren't blocking the project shipping, but are worth doing next. Noth
 
 - **MQTT publisher** — implemented in `mqtt_publisher.py`. Publishes per-drone retained state (debounced, latest-wins), a `/status` snapshot, detection events, and an `online`/`offline` LWT. Configured via `--mqtt-broker` / `MQTT_BROKER` env. See README for topic layout.
 - **Wi-Fi NAN decoding** — `wifi_feeder.py` now walks the NAN attributes inside a Public Action frame, finds the Service Descriptor Attribute matching the ODID Service ID, strips the send-counter byte out of the Service Info, and hands the ODID payload to the existing decoder. Sub-messages are routed into the tracker with `rid_source="wifi_nan"`; the dashboard's "By transport" table includes `wifi_nan` again.
+- **Self-ID decoding (msg type 0x3)** — added `parse_self_id` to both feeders, `update_self_id` to the tracker. Free-text "purpose of flight" string surfaces in the journal (`[BLE] … Type=Self ID Description="…"`), the JSON feed (`self_id` + `self_id_seen`), MQTT per-drone state, and as a new **Description** column in the dashboard.
+- **Defensive NAN logging** — when `_is_nan_action` matches but `_extract_nan_odid` returns None we now `log.warning` with a hex prefix of the frame body. Costs nothing when no malformed NAN ODID is in the air; provides immediate diagnostic data the day a real NAN transmitter shows up that doesn't quite match our spec interpretation.
 
 ## Parked ideas
 
@@ -19,7 +21,10 @@ The FEED.md contract is in place; actually plumb the Pi → `ha-airspace` → Ho
 Flash an ESP32-S3 with `ArduPilot/ArduRemoteID`. Closes the trust gap the spoofer's encoding quirks (`gs` 3×, `track` mod 180°) leave open. ~$10–15 of hardware.
 
 ### Extract shared decoder
-`ble_feeder.py` and `wifi_feeder.py` each carry their own copy of `parse_basic_id` / `parse_location` / `parse_system_msg` / `parse_operator_id` / `decode_rid_message`. Refactor to a shared `odid_decoder.py` so the next spec fix is a one-file change.
+`ble_feeder.py` and `wifi_feeder.py` each carry their own copy of `parse_basic_id` / `parse_location` / `parse_system_msg` / `parse_operator_id` / `parse_self_id` / `decode_rid_message`. Refactor to a shared `odid_decoder.py` so the next spec fix is a one-file change.
+
+### pytest test suite
+Promote the high-quality smoke tests we've been writing in heredocs into a real `tests/` directory with `pytest`. Coverage targets: each `parse_*` parser, the NAN SDA extraction with optional-field variants, tracker callbacks + most-recent-wins, MQTT publisher's latest-wins debounce. Lets v1.x change code without flying blind.
 
 ## Considered and declined
 

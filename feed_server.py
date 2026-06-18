@@ -121,10 +121,10 @@ _DASHBOARD_HTML = """<!doctype html>
 <h2>Drones</h2>
 <table>
   <thead><tr>
-    <th>UAS-ID</th><th>Type</th><th>Drone</th><th>Operator</th><th>Alt</th><th>AGL</th>
+    <th>UAS-ID</th><th>Type</th><th>Description</th><th>Drone</th><th>Operator</th><th>Alt</th><th>AGL</th>
     <th>GS</th><th>Track</th><th>RSSI</th><th>Source</th><th>Age</th>
   </tr></thead>
-  <tbody id="drones"><tr><td class="empty" colspan="11">no drones currently in range</td></tr></tbody>
+  <tbody id="drones"><tr><td class="empty" colspan="12">no drones currently in range</td></tr></tbody>
 </table>
 
 <footer>Polls /status and /data/remoteid.json every 1.5 s &middot; FEED.md is the wire contract.</footer>
@@ -242,11 +242,12 @@ async function tick() {
 
     const drones = document.getElementById('drones');
     if (!f.drones || f.drones.length === 0) {
-      drones.innerHTML = '<tr><td class="empty" colspan="11">no drones currently in range</td></tr>';
+      drones.innerHTML = '<tr><td class="empty" colspan="12">no drones currently in range</td></tr>';
     } else {
       drones.innerHTML = f.drones.map(d => '<tr>'
         + '<td class="id">' + escapeHtml(d.id) + '</td>'
         + '<td>' + (d.ua_type || '–') + '</td>'
+        + '<td>' + (d.self_id ? escapeHtml(d.self_id) : '–') + '</td>'
         + '<td class="num">' + coordCell(d.lat, d.lon) + '</td>'
         + '<td class="num">' + coordCell(d.operator?.lat, d.operator?.lon) + '</td>'
         + '<td class="num">' + fmt.num(conv.alt(d.alt_geom_ft), 0) + ' ' + lbl.alt() + '</td>'

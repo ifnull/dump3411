@@ -126,11 +126,15 @@ class DroneState:
     op_alt_takeoff_m: Optional[float] = None
     operator_id: Optional[str]        = None
 
+    # Self-ID — free-text purpose-of-flight string. Most-recent wins.
+    self_id: Optional[str] = None
+
     # Counters and timestamps (monotonic, intervals only).
     message_count: int                  = 0
     last_seen: float                    = 0.0
     last_pos_seen: Optional[float]      = None
     last_operator_seen: Optional[float] = None
+    last_self_id_seen: Optional[float]  = None
 
 
 # -- Tracker -------------------------------------------------------------------
@@ -273,6 +277,28 @@ class Tracker:
             state.last_operator_seen    = now
             self._fire_change(state, now)
 
+    def update_self_id(self, *, mac: str, description: str,
+                       rssi: Optional[float], rid_source: str) -> None:
+        """Decoded a Self-ID message (0x3) — free-text purpose-of-flight string.
+
+        Empty descriptions are ignored — many transmitters emit a blank string
+        before the operator configures one.
+        """
+        now = time.monotonic()
+        with self._lock:
+            state = self._drone_for_mac(mac)
+            if state is None:
+                return
+            self._messages_total       += 1
+            self._bump_source(rid_source, now)
+            if description:             state.self_id = description
+            state.rssi_dbm              = rssi
+            state.rid_source            = rid_source
+            state.message_count        += 1
+            state.last_seen             = now
+            state.last_self_id_seen     = now
+            self._fire_change(state, now)
+
     def update_operator_id(self, *, mac: str, operator_id: str,
                            rssi: Optional[float], rid_source: str) -> None:
         """Decoded an Operator ID message (0x5).
@@ -351,6 +377,9 @@ class Tracker:
         if s.last_pos_seen is not None:
             row["seen_pos"] = round(now_mono - s.last_pos_seen, 1)
         if s.rid_source is not None:   row["rid_source"]  = s.rid_source
+        if s.self_id is not None:      row["self_id"]     = s.self_id
+        if s.last_self_id_seen is not None:
+            row["self_id_seen"] = round(now_mono - s.last_self_id_seen, 1)
 
         operator: dict = {}
         if s.op_lat is not None:           operator["lat"]            = round(s.op_lat, 7)

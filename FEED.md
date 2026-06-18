@@ -55,6 +55,8 @@ Use stdlib `http.server` — no async, no extra deps. dump3411 is designed to ru
 | `seen` | number | s | ✓ | `now - last_seen[id]` |
 | `seen_pos` | number | s |  | `now - last_pos_seen[id]` |
 | `rid_source` | string | — |  | `ble` \| `wifi_beacon` \| `wifi_nan` |
+| `self_id` | string | — |  | Self-ID `description` — free-text purpose of flight (e.g. "Search and Rescue", "Photography Lesson") |
+| `self_id_seen` | number | s |  | `now - last_self_id_seen[id]` |
 | `operator` | object | — |  | from System / Operator-ID msgs (see below) |
 
 ### `operator` sub-object (present once seen)
