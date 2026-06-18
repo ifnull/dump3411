@@ -24,6 +24,7 @@ line per consumer poll).
 import http.server
 import json
 import logging
+import urllib.parse
 from typing import Tuple
 
 from tracker import Tracker
@@ -244,8 +245,14 @@ async function tick() {
     if (!f.drones || f.drones.length === 0) {
       drones.innerHTML = '<tr><td class="empty" colspan="12">no drones currently in range</td></tr>';
     } else {
+      const historyEnabled = !!s.history_enabled;
       drones.innerHTML = f.drones.map(d => '<tr>'
-        + '<td class="id">' + escapeHtml(d.id) + '</td>'
+        + '<td class="id">'
+        + (historyEnabled
+            ? '<a class="maplink" href="/map?uas_id=' + encodeURIComponent(d.id)
+              + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(d.id) + '</a>'
+            : escapeHtml(d.id))
+        + '</td>'
         + '<td>' + (d.ua_type || '–') + '</td>'
         + '<td>' + (d.self_id ? escapeHtml(d.self_id) : '–') + '</td>'
         + '<td class="num">' + coordCell(d.lat, d.lon) + '</td>'
@@ -275,13 +282,165 @@ setInterval(tick, 1500);
 """.encode("utf-8")
 
 
+# -- Map view (GET /map?uas_id=X) ----------------------------------------------
+# Self-contained HTML for one-drone track replay. Loads Leaflet from a CDN
+# and OSM tiles from OSM; tiles already require internet to view a map at
+# all, so the extra CDN dependency is a non-issue. The page polls
+# /history.json once on load and renders the track polyline + operator
+# marker. Map only available when history is enabled; the route returns 404
+# otherwise so this HTML stays unreachable.
+
+_MAP_HTML = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>dump3411 — track</title>
+<link rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin="anonymous">
+<style>
+  html, body { margin: 0; padding: 0; height: 100%;
+               font: 13px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+               background: #0d1117; color: #c9d1d9; }
+  #map { position: absolute; inset: 0; }
+  #panel { position: absolute; top: 12px; right: 12px; z-index: 1000;
+           background: rgba(13,17,23,0.92); border: 1px solid #30363d;
+           border-radius: 4px; padding: 10px 12px; max-width: 320px; }
+  #panel h1 { margin: 0 0 0.4rem 0; font-size: 0.95rem; font-weight: 600; }
+  #panel .meta { color: #8b949e; font-size: 0.75rem; line-height: 1.6; }
+  #panel .meta b { color: #e6edf3; font-weight: 600; }
+  #panel a { color: #58a6ff; }
+  #empty { position: absolute; left: 50%; top: 50%;
+           transform: translate(-50%, -50%); padding: 1rem 1.5rem;
+           background: rgba(13,17,23,0.92); border: 1px solid #6b1f1f;
+           border-radius: 4px; color: #ffb4b4; z-index: 1000;
+           display: none; }
+  .leaflet-popup-content-wrapper { background: #161b22; color: #c9d1d9; }
+  .leaflet-popup-tip { background: #161b22; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="panel">
+  <h1 id="uas-id">…</h1>
+  <div class="meta" id="meta"></div>
+  <div class="meta"><a href="/">← dashboard</a></div>
+</div>
+<div id="empty">No track points stored for this UAS-ID yet.</div>
+
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+        crossorigin="anonymous"></script>
+<script>
+const params = new URLSearchParams(location.search);
+const uasId = params.get('uas_id') || '';
+document.getElementById('uas-id').textContent = uasId || '(no uas_id)';
+
+const map = L.map('map', { preferCanvas: true });
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© OpenStreetMap contributors',
+  maxZoom: 19,
+}).addTo(map);
+map.setView([0, 0], 2);
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[c]));
+}
+function fmt(v, d) { return (v == null || Number.isNaN(v)) ? '–' : Number(v).toFixed(d); }
+
+async function loadTrack() {
+  if (!uasId) { document.getElementById('empty').style.display = 'block'; return; }
+  let data;
+  try {
+    const r = await fetch('/history.json?uas_id=' + encodeURIComponent(uasId),
+                          { cache: 'no-store' });
+    if (!r.ok) throw new Error(r.status);
+    data = await r.json();
+  } catch (e) {
+    document.getElementById('empty').textContent = 'history.json failed: ' + e.message;
+    document.getElementById('empty').style.display = 'block';
+    return;
+  }
+
+  // Drone track — red polyline + per-point circle markers.
+  const track = (data.track || []).filter(p => p.lat != null && p.lon != null);
+  if (track.length > 0) {
+    const coords = track.map(p => [p.lat, p.lon]);
+    L.polyline(coords, { color: '#ff5252', weight: 2, opacity: 0.85 }).addTo(map);
+    track.forEach((p, i) => {
+      const isEnd = (i === 0 || i === track.length - 1);
+      const m = L.circleMarker([p.lat, p.lon], {
+        radius: isEnd ? 5 : 3,
+        color: '#ff5252', fillColor: isEnd ? '#ff5252' : '#ff8a8a',
+        fillOpacity: 0.9, weight: isEnd ? 2 : 1,
+      }).addTo(map);
+      const when = new Date(p.ts * 1000).toLocaleString();
+      m.bindPopup(
+        '<b>' + when + '</b><br>'
+        + 'Alt: '   + fmt(p.alt_geom_ft, 0) + ' ft<br>'
+        + 'AGL: '   + fmt(p.agl_ft, 0)      + ' ft<br>'
+        + 'Speed: ' + fmt(p.gs, 1)          + ' kt<br>'
+        + 'Track: ' + fmt(p.track, 0)       + '°<br>'
+        + 'RSSI: '  + fmt(p.rssi, 0)        + ' dBm<br>'
+        + 'Src: '   + (p.rid_source || '–')
+      );
+    });
+  }
+
+  // Operator marker — blue.
+  const op = data.operator;
+  if (op && op.lat != null && op.lon != null) {
+    L.circleMarker([op.lat, op.lon], {
+      radius: 7, color: '#1f6feb', fillColor: '#58a6ff',
+      fillOpacity: 0.9, weight: 2,
+    }).addTo(map).bindPopup(
+      '<b>Operator</b><br>'
+      + (op.id ? 'ID: ' + escapeHtml(op.id) + '<br>' : '')
+      + 'Last seen: ' + new Date(op.ts * 1000).toLocaleString()
+    );
+  }
+
+  // Side panel meta.
+  const since = track.length ? new Date(track[0].ts * 1000).toLocaleString() : '–';
+  const until = track.length ? new Date(track[track.length-1].ts * 1000).toLocaleString() : '–';
+  document.getElementById('meta').innerHTML =
+      '<b>Type:</b> '   + (data.ua_type  || '–') + '<br>'
+    + '<b>Id type:</b> '+ (data.id_type  || '–') + '<br>'
+    + (data.self_id ? '<b>Description:</b> ' + escapeHtml(data.self_id) + '<br>' : '')
+    + '<b>Points:</b> ' + track.length + '<br>'
+    + '<b>From:</b> '   + since + '<br>'
+    + '<b>To:</b> '     + until;
+
+  // Fit map to whatever we have.
+  const all = [...track.map(p => [p.lat, p.lon])];
+  if (op && op.lat != null) all.push([op.lat, op.lon]);
+  if (all.length > 0) {
+    map.fitBounds(L.latLngBounds(all), { padding: [40, 40], maxZoom: 17 });
+  } else {
+    document.getElementById('empty').style.display = 'block';
+  }
+}
+
+loadTrack();
+</script>
+</body>
+</html>
+""".encode("utf-8")
+
+
 # -- Request handler -----------------------------------------------------------
 
 class _Handler(http.server.BaseHTTPRequestHandler):
-    """Per-request handler.  ``tracker`` is bound at subclass-creation time
-    in :func:`make_server` so this class can be plain BaseHTTPRequestHandler."""
+    """Per-request handler.  ``tracker`` and ``history`` are bound at
+    subclass-creation time in :func:`make_server` so this class can be a
+    plain BaseHTTPRequestHandler."""
 
     tracker: Tracker        # filled in by make_server()
+    history  = None         # HistoryWriter | None; None disables /history and /map
     server_version = "dump3411/1"
     sys_version    = ""     # suppress the default "Python/3.x" Server suffix
 
@@ -312,15 +471,62 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
     def _render(self, path: str) -> Tuple[bytes, str]:
         """Dispatch by path. Raises KeyError on unknown paths."""
-        if path == "/data/remoteid.json":
+        # Strip a query string for path matching; keep self.path intact for
+        # endpoints that consume it.
+        bare = path.split("?", 1)[0]
+        if bare == "/data/remoteid.json":
             body = json.dumps(self.tracker.snapshot(), separators=(",", ":")).encode("utf-8")
             return body, "application/json"
-        if path == "/status":
-            body = json.dumps(self.tracker.health(), separators=(",", ":")).encode("utf-8")
+        if bare == "/status":
+            doc = self.tracker.health()
+            doc["history_enabled"] = self.history is not None
+            if self.history is not None:
+                try:
+                    doc["history"] = self.history.stats()
+                except Exception:
+                    log.exception("history stats failed")
+            body = json.dumps(doc, separators=(",", ":")).encode("utf-8")
             return body, "application/json"
-        if path in ("/", "/index.html"):
+        if bare in ("/", "/index.html"):
             return _DASHBOARD_HTML, "text/html; charset=utf-8"
+        if bare == "/history.json":
+            if self.history is None:
+                raise KeyError(path)
+            return self._history_json(path), "application/json"
+        if bare == "/map":
+            if self.history is None:
+                raise KeyError(path)
+            return _MAP_HTML, "text/html; charset=utf-8"
         raise KeyError(path)
+
+    def _history_json(self, path: str) -> bytes:
+        """Build the /history.json response for a query."""
+        # Minimal query parsing — only the params we use.
+        q = path.split("?", 1)[1] if "?" in path else ""
+        params: dict = {}
+        for part in q.split("&"):
+            if "=" in part:
+                k, v = part.split("=", 1)
+                params[k] = urllib.parse.unquote_plus(v)
+        uas_id = params.get("uas_id", "").strip()
+        if not uas_id:
+            return json.dumps({"error": "uas_id is required"}).encode("utf-8")
+        since = float(params["since"]) if params.get("since") else None
+        until = float(params["until"]) if params.get("until") else None
+        track = self.history.query_track(uas_id, since=since, until=until)
+        operator = self.history.query_operator(uas_id)
+        meta = self.history.query_drone_meta(uas_id) or {}
+        doc = {
+            "uas_id":   uas_id,
+            "id_type":  meta.get("id_type"),
+            "ua_type":  meta.get("ua_type"),
+            "self_id":  meta.get("self_id"),
+            "since":    since,
+            "until":    until,
+            "operator": operator,
+            "track":    track,
+        }
+        return json.dumps(doc, separators=(",", ":")).encode("utf-8")
 
     def _send_headers(self, body_len: int, content_type: str) -> None:
         self.send_response(200)
@@ -338,14 +544,20 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
 # -- Server constructors -------------------------------------------------------
 
-def make_server(addr: Tuple[str, int], tracker: Tracker) -> http.server.ThreadingHTTPServer:
+def make_server(addr: Tuple[str, int], tracker: Tracker,
+                history=None) -> http.server.ThreadingHTTPServer:
     """Build a ThreadingHTTPServer bound to ``addr`` serving ``tracker``.
+
+    When ``history`` is provided, ``/history.json`` and ``/map`` light up
+    and ``/status`` exposes ``history_enabled: true`` (used by the
+    dashboard to decide whether to render UAS-IDs as clickable map links).
 
     Returns the server instance so the caller can ``serve_forever()`` it on
     any thread and ``shutdown()`` it cleanly (used by the standalone test
     below).
     """
-    handler_cls = type("Handler", (_Handler,), {"tracker": tracker})
+    handler_cls = type("Handler", (_Handler,),
+                       {"tracker": tracker, "history": history})
     return http.server.ThreadingHTTPServer(addr, handler_cls)
 
 

@@ -8,11 +8,9 @@ Things that aren't blocking the project shipping, but are worth doing next. Noth
 - **Wi-Fi NAN decoding** — `wifi_feeder.py` now walks the NAN attributes inside a Public Action frame, finds the Service Descriptor Attribute matching the ODID Service ID, strips the send-counter byte out of the Service Info, and hands the ODID payload to the existing decoder. Sub-messages are routed into the tracker with `rid_source="wifi_nan"`; the dashboard's "By transport" table includes `wifi_nan` again.
 - **Self-ID decoding (msg type 0x3)** — added `parse_self_id` to both feeders, `update_self_id` to the tracker. Free-text "purpose of flight" string surfaces in the journal (`[BLE] … Type=Self ID Description="…"`), the JSON feed (`self_id` + `self_id_seen`), MQTT per-drone state, and as a new **Description** column in the dashboard.
 - **Defensive NAN logging** — when `_is_nan_action` matches but `_extract_nan_odid` returns None we now `log.warning` with a hex prefix of the frame body. Costs nothing when no malformed NAN ODID is in the air; provides immediate diagnostic data the day a real NAN transmitter shows up that doesn't quite match our spec interpretation.
+- **Persistent detection history** — opt-in SQLite log (`HISTORY_DB=…`) that hooks the same `on_change` callback MQTT uses. Per-drone debounced writes (default 1 s), size + age rotation (defaults 100 MB / 30 d). When enabled, `GET /history.json?uas_id=X` returns the full track and operator location; `GET /map?uas_id=X` serves a self-contained Leaflet page with the operator pin and the drone polyline. Dashboard UAS-IDs become clickable map links automatically (and stay plain text when history is off). `/status` reports `history_enabled` + stats. Disabled by default for SD-card safety.
 
 ## Parked ideas
-
-### Persistent detection history
-Append every decoded detection to a rolling SQLite log (size-capped). Lets the dashboard show "what flew over today/yesterday/this week" and survives reboots in a structured form (vs the journal's text-only history).
 
 ### Wire [`ha-airspace`](https://github.com/ifnull/ha-airspace) end-to-end
 The FEED.md contract is in place; actually plumb the Pi → `ha-airspace` → Home Assistant path with live data and confirm the round-trip.

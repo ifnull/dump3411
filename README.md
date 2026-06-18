@@ -160,6 +160,30 @@ Quick LAN-side check after configuring:
 mosquitto_sub -h mqtt.lan -t 'dump3411/#' -v
 ```
 
+## Persistent detection history (optional)
+
+When `--history-db PATH` is configured (or `HISTORY_DB=` in the env file), dump3411 logs every decoded snapshot to a SQLite database. Disabled by default — Pi SD cards are mortal.
+
+```bash
+# /etc/dump3411.env
+HISTORY_DB=/var/lib/dump3411/history.db
+HISTORY_MAX_MB=100           # default 100; rotates oldest rows when over
+HISTORY_RETENTION_DAYS=30    # default 30; drops rows older than this
+HISTORY_DEBOUNCE_S=1.0       # default 1.0; per-drone min write spacing
+```
+
+`sudo mkdir -p /var/lib/dump3411 && sudo chown root:root /var/lib/dump3411` before first start. Restart the service after editing the env file.
+
+When history is enabled:
+
+- Every UAS-ID in the dashboard becomes a clickable link to **`/map?uas_id=<ID>`** — a self-contained Leaflet page showing the operator location (blue marker) and the drone's full track (red polyline with per-point markers, click each for timestamp, altitude, AGL, speed, track, RSSI, transport).
+- **`GET /history.json?uas_id=<ID>&since=<epoch>&until=<epoch>`** returns the same data as JSON. `since`/`until` are optional.
+- **`GET /status`** gains a `history_enabled: true` flag plus `history: { rows, drones, size_bytes, earliest_ts, latest_ts }`.
+
+When history is **not** configured, `/map` and `/history.json` return 404 and the dashboard renders UAS-IDs as plain text — no UI surprises.
+
+The map view loads Leaflet from a CDN and OSM tiles from OpenStreetMap (so this *one* page requires internet to render at all — tiles do); the rest of dump3411 stays fully offline.
+
 ## Logs
 
 The detector writes no log file of its own; under systemd its output goes to the journal:

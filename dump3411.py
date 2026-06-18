@@ -100,6 +100,31 @@ def _parse_args() -> argparse.Namespace:
         "--mqtt-password", default=os.environ.get("MQTT_PASSWORD"),
         help="MQTT password. Also read from $MQTT_PASSWORD.",
     )
+    # Persistent history — optional. Disabled by default for SD-card safety.
+    p.add_argument(
+        "--history-db", default=os.environ.get("HISTORY_DB"),
+        metavar="PATH",
+        help="Persist per-message detections to a SQLite log at PATH. "
+             "Also read from $HISTORY_DB. Disabled when unset.",
+    )
+    p.add_argument(
+        "--history-max-mb", type=float,
+        default=float(os.environ.get("HISTORY_MAX_MB", "100")),
+        help="Cap the history DB at N megabytes (default: 100). "
+             "Also read from $HISTORY_MAX_MB.",
+    )
+    p.add_argument(
+        "--history-retention-days", type=float,
+        default=float(os.environ.get("HISTORY_RETENTION_DAYS", "30")),
+        help="Drop history rows older than N days (default: 30). "
+             "Also read from $HISTORY_RETENTION_DAYS.",
+    )
+    p.add_argument(
+        "--history-debounce-s", type=float,
+        default=float(os.environ.get("HISTORY_DEBOUNCE_S", "1.0")),
+        help="Min seconds between per-drone history writes (default: 1.0). "
+             "Also read from $HISTORY_DEBOUNCE_S.",
+    )
     return p.parse_args()
 
 
@@ -130,9 +155,48 @@ def main() -> None:
         except RuntimeError as e:
             log.error("%s", e)
             sys.exit(2)
+
+    # Persistent history writer — also optional.
+    history = None
+    if args.history_db:
+        from history import HistoryWriter
+        history = HistoryWriter(
+            db_path=args.history_db,
+            max_mb=args.history_max_mb,
+            retention_days=args.history_retention_days,
+            debounce_s=args.history_debounce_s,
+        )
+
+    # Fan tracker callbacks out to every configured sink. Each sink gets the
+    # imperial row dict that goes into the JSON feed — same source of truth.
+    on_change_sinks = []
+    on_expire_sinks = []
+    if publisher is not None:
+        on_change_sinks.append(publisher.on_drone_change)
+        on_expire_sinks.append(publisher.on_drone_expire)
+    if history is not None:
+        on_change_sinks.append(history.on_drone_change)
+        # History intentionally has no expire hook — TTL eviction in the
+        # tracker doesn't mean we should forget the flight on disk.
+
+    def _fan_change(uas_id, row, _sinks=on_change_sinks):
+        for cb in _sinks:
+            try:
+                cb(uas_id, row)
+            except Exception:
+                log.exception("on_change sink raised for %s", uas_id)
+
+    def _fan_expire(uas_id, _sinks=on_expire_sinks):
+        for cb in _sinks:
+            try:
+                cb(uas_id)
+            except Exception:
+                log.exception("on_expire sink raised for %s", uas_id)
+
+    if on_change_sinks or on_expire_sinks:
         tracker.set_callbacks(
-            on_change=publisher.on_drone_change,
-            on_expire=publisher.on_drone_expire,
+            on_change=_fan_change if on_change_sinks else None,
+            on_expire=_fan_expire if on_expire_sinks else None,
         )
 
     ble  = BLEFeeder(adapter=args.ble_adapter, verbose=args.verbose,
@@ -154,13 +218,18 @@ def main() -> None:
     server   = None
     if args.serve:
         host, port = _parse_addr(args.serve)
-        server = feed_server.make_server((host, port), tracker)
+        server = feed_server.make_server((host, port), tracker, history=history)
         log.info(f"feed listening on http://{host}:{port}/data/remoteid.json")
+        if history is not None:
+            log.info(f"history at {args.history_db}; map view: "
+                     f"http://{host}:{port}/map?uas_id=<UAS-ID>")
     else:
         log.info("detection-only mode (no --serve)")
 
     if publisher is not None:
         publisher.start()
+    if history is not None:
+        history.start()
 
     def _handle_term(signum, _frame):
         log.info(f"signal {signum} received — shutting down")
@@ -183,6 +252,8 @@ def main() -> None:
         tracker.stop()
         if publisher is not None:
             publisher.stop()
+        if history is not None:
+            history.stop()
         # Wifi cleanup (restore_managed_mode) runs in its thread's finally.
         # Give it a moment before the process exits and kills daemon threads.
         time.sleep(1.5)
