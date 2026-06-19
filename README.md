@@ -216,6 +216,10 @@ These do not serve the feed and do not update the shared tracker; only `dump3411
 - The Wi-Fi capture parses every 802.11 management frame in Python. On single-core ARMv6 hosts (Pi Zero W) that's heavy and may drop packets under busy 2.4 GHz — fine for detection, not lossless. More-powerful hosts will keep up easily.
 - The CPU-temp tile reads `/sys/class/thermal/thermal_zone0/temp`; on hosts without that file the dashboard shows `–`.
 
+## Changelog
+
+Release notes live in [CHANGELOG.md](./CHANGELOG.md).
+
 ## Credit & license
 
 Inspired by the [DroneAware Node feeders](https://droneaware.io/). If you are looking for a user friendly experience, take a look at that project. See [LICENSE](./LICENSE).
