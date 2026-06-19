@@ -9,27 +9,27 @@ Spiritual sibling of [dump1090](https://github.com/flightaware/dump1090) (ADS-B 
 You'll need a Linux host with Python 3.10+, a Bluetooth adapter (built-in or USB), and a USB Wi-Fi adapter that supports monitor mode (Alfa AWUS036NEH or any Ralink RT3070-based adapter).
 
 ```bash
-# 1. Dependencies
-sudo apt update
-sudo apt install -y python3-bleak iw rfkill bluez
-
-# 2. Clone
 git clone https://github.com/ifnull/dump3411.git
 cd dump3411
+sudo ./install.sh
+```
 
-# 3. Confirm your USB Wi-Fi adapter's interface name (usually wlan1)
-ip link
+`install.sh` installs apt dependencies, auto-detects your USB Wi-Fi adapter (prompts if multiple are present), rewrites the systemd unit's `ExecStart` paths to match this checkout, then enables + starts the service. It's idempotent — re-run after a `git pull` to roll out config changes.
 
-# 4. If yours isn't wlan1, or the repo isn't at /home/pi/dump3411,
-#    edit ExecStart in dump3411.service to match before the next step.
+Open the dashboard from any LAN host:
 
-# 5. Install and start
+```bash
+echo "http://$(hostname -I | awk '{print $1}'):8754/"
+```
+
+If you'd rather do it by hand, the manual install is:
+
+```bash
+sudo apt install -y python3-bleak iw rfkill bluez
+# edit ExecStart in dump3411.service for your interface and repo path
 sudo cp dump3411.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now dump3411
-
-# 6. Open the dashboard from any LAN host
-echo "http://$(hostname -I | awk '{print $1}'):8754/"
 ```
 
 Service status / live tail:

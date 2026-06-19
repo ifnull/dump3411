@@ -1,0 +1,73 @@
+[build-system]
+requires      = ["setuptools >= 61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+
+[project]
+name            = "dump3411"
+version         = "1.0.0"
+description     = "Local-only Remote ID drone detector for Linux (BLE + Wi-Fi Beacon + Wi-Fi NAN, per ASTM F3411)"
+readme          = "README.md"
+license         = { file = "LICENSE" }
+requires-python = ">= 3.10"
+authors         = [{ name = "ifnull" }]
+keywords        = [
+    "drone", "remote-id", "astm-f3411", "rid",
+    "bluetooth", "wifi", "monitor-mode", "opendroneid",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Intended Audience :: Information Technology",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Communications",
+    "Topic :: Security",
+    "Topic :: System :: Monitoring",
+]
+
+# Runtime deps: bleak for the BLE scanner. The Wi-Fi side uses stdlib raw
+# sockets (no scapy). The JSON feed, dashboard, history, and HTTP layer are
+# all stdlib. MQTT is optional and gated by the `mqtt` extra below.
+dependencies = [
+    "bleak >= 0.19",
+]
+
+
+[project.optional-dependencies]
+# `pip install dump3411[mqtt]` for the MQTT publisher; matches what
+# `sudo apt install python3-paho-mqtt` already provides on Debian/Ubuntu.
+mqtt = ["paho-mqtt >= 1.6"]
+
+
+[project.urls]
+Homepage   = "https://github.com/ifnull/dump3411"
+Repository = "https://github.com/ifnull/dump3411"
+Issues     = "https://github.com/ifnull/dump3411/issues"
+
+
+# Console script — once installed, `sudo dump3411 --wifi-iface wlan1 --serve …`
+# works the same as `sudo python3 dump3411.py --wifi-iface wlan1 --serve …`.
+[project.scripts]
+dump3411 = "dump3411:main"
+
+
+# Flat-module layout: each .py at repo root becomes a top-level installed
+# module. We don't move sources into a dump3411/ package because the systemd
+# unit and the standalone per-radio scripts (ble_feeder.py / wifi_feeder.py)
+# are designed around running directly from the repo. Keeping the layout flat
+# avoids a churny rename for what is a single-purpose deployment.
+[tool.setuptools]
+py-modules = [
+    "dump3411",
+    "tracker",
+    "feed_server",
+    "ble_feeder",
+    "wifi_feeder",
+    "mqtt_publisher",
+    "history",
+]
