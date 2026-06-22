@@ -301,15 +301,16 @@ async function tick() {
            + '<td class="num">' + (x.last_seen_s == null ? 'never' : fmt.age(x.last_seen_s)) + '</td></tr>';
     }).join('');
 
+    const historyEnabled = !!s.history_enabled;
+    document.getElementById('recent-heading').style.display = historyEnabled ? '' : 'none';
+    document.getElementById('recent-table').style.display   = historyEnabled ? '' : 'none';
+    if (historyEnabled) maybeLoadRecent();
+    liveUasIds = new Set((f.drones || []).map(d => d.id));
+
     const drones = document.getElementById('drones');
     if (!f.drones || f.drones.length === 0) {
       drones.innerHTML = '<tr><td class="empty" colspan="12">no drones currently in range</td></tr>';
     } else {
-      const historyEnabled = !!s.history_enabled;
-      liveUasIds = new Set(f.drones.map(d => d.id));
-      document.getElementById('recent-heading').style.display = historyEnabled ? '' : 'none';
-      document.getElementById('recent-table').style.display   = historyEnabled ? '' : 'none';
-      if (historyEnabled) maybeLoadRecent();
       drones.innerHTML = f.drones.map(d => '<tr>'
         + '<td class="id">'
         + (historyEnabled
