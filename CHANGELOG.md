@@ -7,6 +7,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- Dashboard's **Recent detections** lookback window now defaults to 7 days (was 24 h) and is configurable via `--history-recent-days` / `HISTORY_RECENT_DAYS`. The heading and empty-state text now reflect the active window — `/history/recent.json` carries `window_seconds` + `window_label` for clients that want to render it.
+
 
 ## [1.0.0] — 2026-06-18
 

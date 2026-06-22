@@ -111,11 +111,15 @@ class HistoryWriter:
     def __init__(self, db_path: str,
                  max_mb: float = 100.0,
                  retention_days: float = 30.0,
-                 debounce_s: float = 1.0):
+                 debounce_s: float = 1.0,
+                 recent_days: float = 7.0):
         self._path = db_path
         self._max_bytes = int(max_mb * 1024 * 1024)
         self._retention_s = float(retention_days) * 86400.0
         self._debounce_s = float(debounce_s)
+        # Default window for /history/recent.json + the dashboard's Recent table.
+        # Independent of retention — retention bounds the DB, this bounds the view.
+        self.recent_seconds = float(recent_days) * 86400.0
 
         # One write connection guarded by a lock; readers use per-request conns.
         os.makedirs(os.path.dirname(os.path.abspath(db_path)) or ".", exist_ok=True)
@@ -131,8 +135,10 @@ class HistoryWriter:
         self._stop = threading.Event()
         self._cleanup_thread: Optional[threading.Thread] = None
 
-        log.info("history: %s (max=%.0f MB, retention=%.1f d, debounce=%.1f s)",
-                 db_path, max_mb, retention_days, debounce_s)
+        log.info(
+            "history: %s (max=%.0f MB, retention=%.1f d, debounce=%.1f s, recent=%.1f d)",
+            db_path, max_mb, retention_days, debounce_s, recent_days,
+        )
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -287,7 +293,8 @@ class HistoryWriter:
                             limit: int = 50) -> list[dict]:
         """Summary rows for drones seen within the time window, most recently
         seen first. Used by ``/history/recent.json`` for the dashboard's
-        Recent detections section. ``since`` defaults to 24 h ago.
+        Recent detections section. ``since`` defaults to ``self.recent_seconds``
+        ago (7 days unless overridden via --history-recent-days).
 
         Each row carries first_seen / last_seen / messages plus the latest
         id_type / ua_type / self_id seen for the drone (since identity
@@ -295,7 +302,7 @@ class HistoryWriter:
         course of a long flight).
         """
         if since is None:
-            since = time.time() - 86400.0
+            since = time.time() - self.recent_seconds
         c = self._read_conn()
         try:
             rows = c.execute(

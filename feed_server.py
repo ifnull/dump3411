@@ -131,7 +131,7 @@ _DASHBOARD_HTML = """<!doctype html>
   <tbody id="drones"><tr><td class="empty" colspan="12">no drones currently in range</td></tr></tbody>
 </table>
 
-<h2 id="recent-heading" style="display: none;">Recent detections (last 24 h)</h2>
+<h2 id="recent-heading" style="display: none;">Recent detections</h2>
 <table id="recent-table" style="display: none;">
   <thead><tr>
     <th>UAS-ID</th><th>Type</th><th>Description</th>
@@ -245,10 +245,14 @@ async function loadRecent() {
     if (!r.ok) return;
     data = await r.json();
   } catch (e) { return; }
+  const label = data.window_label || 'recently';
+  document.getElementById('recent-heading').textContent =
+    'Recent detections (' + label + ')';
   const tbody = document.getElementById('recent');
   const drones = data.drones || [];
   if (drones.length === 0) {
-    tbody.innerHTML = '<tr><td class="empty" colspan="6">no detections in the last 24 hours</td></tr>';
+    tbody.innerHTML =
+      '<tr><td class="empty" colspan="6">no detections in the ' + label + '</td></tr>';
     return;
   }
   const now = data.now || (Date.now() / 1000);
@@ -492,6 +496,24 @@ loadTrack();
 """.encode("utf-8")
 
 
+# -- Helpers -------------------------------------------------------------------
+
+def _format_window(seconds: float) -> str:
+    """Render a lookback window length as a short label for the dashboard
+    (e.g. "last 7 days", "last 24 hours", "last 30 minutes")."""
+    if seconds < 3600:
+        m = max(1, int(round(seconds / 60)))
+        return f"last {m} minute{'s' if m != 1 else ''}"
+    if seconds < 86400:
+        h = int(round(seconds / 3600))
+        return f"last {h} hour{'s' if h != 1 else ''}"
+    d = seconds / 86400.0
+    if abs(d - round(d)) < 0.05:
+        d_i = int(round(d))
+        return f"last {d_i} day{'s' if d_i != 1 else ''}"
+    return f"last {d:.1f} days"
+
+
 # -- Request handler -----------------------------------------------------------
 
 class _Handler(http.server.BaseHTTPRequestHandler):
@@ -579,10 +601,13 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         except ValueError:
             limit = 50
         rows = self.history.query_recent_drones(since=since, limit=limit)
+        window_s = (time.time() - since) if since is not None else self.history.recent_seconds
         doc = {
-            "now":    round(time.time(), 1),
-            "since":  since if since is not None else round(time.time() - 86400, 1),
-            "drones": rows,
+            "now":            round(time.time(), 1),
+            "since":          since if since is not None else round(time.time() - self.history.recent_seconds, 1),
+            "window_seconds": round(window_s, 1),
+            "window_label":   _format_window(window_s),
+            "drones":         rows,
         }
         return json.dumps(doc, separators=(",", ":")).encode("utf-8")
 

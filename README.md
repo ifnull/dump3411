@@ -170,6 +170,7 @@ HISTORY_DB=/var/lib/dump3411/history.db
 HISTORY_MAX_MB=100           # default 100; rotates oldest rows when over
 HISTORY_RETENTION_DAYS=30    # default 30; drops rows older than this
 HISTORY_DEBOUNCE_S=1.0       # default 1.0; per-drone min write spacing
+HISTORY_RECENT_DAYS=7        # default 7;   dashboard Recent table lookback
 ```
 
 `sudo mkdir -p /var/lib/dump3411 && sudo chown root:root /var/lib/dump3411` before first start. Restart the service after editing the env file.
@@ -177,9 +178,9 @@ HISTORY_DEBOUNCE_S=1.0       # default 1.0; per-drone min write spacing
 When history is enabled:
 
 - Every UAS-ID in the dashboard becomes a clickable link to **`/map?uas_id=<ID>`** — a self-contained Leaflet page showing the operator location (blue marker) and the drone's full track (red polyline with per-point markers, click each for timestamp, altitude, AGL, speed, track, RSSI, transport).
-- The dashboard gets a **Recent detections** table below the live Drones section, listing UAS-IDs seen in the last 24 hours with type, description, first/last seen, message count, and a `● live` badge next to anything currently in the live tracker. Polled on a 30 s cadence — much slower than the 1.5 s live data. Same hyperlink behavior: click a UAS-ID to open its map.
+- The dashboard gets a **Recent detections** table below the live Drones section, listing UAS-IDs seen in the configured window (default last 7 days; set `HISTORY_RECENT_DAYS=`) with type, description, first/last seen, message count, and a `● live` badge next to anything currently in the live tracker. Polled on a 30 s cadence — much slower than the 1.5 s live data. Same hyperlink behavior: click a UAS-ID to open its map.
 - **`GET /history.json?uas_id=<ID>&since=<epoch>&until=<epoch>`** returns the same data as JSON for one drone. `since`/`until` are optional.
-- **`GET /history/recent.json?since=<epoch>&limit=<N>`** lists recently-seen drones (defaults: last 24 h, 50 most recent).
+- **`GET /history/recent.json?since=<epoch>&limit=<N>`** lists recently-seen drones (defaults: configured `HISTORY_RECENT_DAYS` window — 7 days out of the box — and 50 most recent). Response includes `window_seconds` and `window_label` for clients that want to render the lookback.
 - **`GET /status`** gains a `history_enabled: true` flag plus `history: { rows, drones, size_bytes, earliest_ts, latest_ts }`.
 
 When history is **not** configured, `/map` and `/history.json` return 404 and the dashboard renders UAS-IDs as plain text — no UI surprises.

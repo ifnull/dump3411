@@ -125,6 +125,13 @@ def _parse_args() -> argparse.Namespace:
         help="Min seconds between per-drone history writes (default: 1.0). "
              "Also read from $HISTORY_DEBOUNCE_S.",
     )
+    p.add_argument(
+        "--history-recent-days", type=float,
+        default=float(os.environ.get("HISTORY_RECENT_DAYS", "7")),
+        help="Lookback window for the dashboard's Recent detections table "
+             "and /history/recent.json's default (default: 7 days). "
+             "Also read from $HISTORY_RECENT_DAYS.",
+    )
     return p.parse_args()
 
 
@@ -165,6 +172,7 @@ def main() -> None:
             max_mb=args.history_max_mb,
             retention_days=args.history_retention_days,
             debounce_s=args.history_debounce_s,
+            recent_days=args.history_recent_days,
         )
 
     # Fan tracker callbacks out to every configured sink. Each sink gets the
