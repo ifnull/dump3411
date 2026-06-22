@@ -7,12 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-### Changed
 
-- Dashboard's **Recent detections** lookback window now defaults to 7 days (was 24 h) and is configurable via `--history-recent-days` / `HISTORY_RECENT_DAYS`. The heading and empty-state text now reflect the active window — `/history/recent.json` carries `window_seconds` + `window_label` for clients that want to render it.
-
-
-## [1.0.0] — 2026-06-18
+## [1.0.0] — 2026-06-21
 
 First tagged release.
 
@@ -29,13 +25,13 @@ First tagged release.
   - `GET /data/remoteid.json` — current tracker snapshot. Wire format locked by FEED.md (imperial units).
   - `GET /status` — operational health (uptime, last beacon, CPU temp, per-source counters, `history_enabled` + `history` stats when enabled).
   - `GET /` — self-contained status dashboard. Service-health pill, top-tile counters, per-transport message rates, live drone table with Google Maps links for both drone and operator coordinates, and a per-browser ft·kt·°F ↔ m·m/s·°C unit toggle (persists in `localStorage`).
-- Dashboard **Recent detections** section — last 24 h of drones from the history DB, polled on a 30 s cadence. Each UAS-ID hyperlinks to `/map`; a `● live` badge marks anything also currently in the live tracker. Hidden when history is disabled.
+- Dashboard **Recent detections** section — drones from the history DB over a configurable lookback (default 7 days, `--history-recent-days` / `HISTORY_RECENT_DAYS`), polled on a 30 s cadence. Each UAS-ID hyperlinks to `/map`; a `● live` badge marks anything also currently in the live tracker. Renders whenever history is enabled, including on IDLE ticks with no live drones.
 
 ### Persistence
 
 - Opt-in SQLite detection history (`--history-db PATH` / `HISTORY_DB=`). Disabled by default for SD-card safety. Per-drone debounced writes (default 1 s), age + size rotation (defaults 30 d / 100 MB).
 - `GET /history.json?uas_id=…&since=…&until=…` returns the full track and operator location for one drone.
-- `GET /history/recent.json?since=…&limit=…` lists recently-seen drones (defaults: last 24 h, 50 most recent).
+- `GET /history/recent.json?since=…&limit=…` lists recently-seen drones (defaults: configured `HISTORY_RECENT_DAYS` window — 7 days out of the box — and 50 most recent). Response carries `window_seconds` + `window_label` so clients can render the lookback without hard-coding it.
 - `GET /map?uas_id=…` — self-contained Leaflet page with the operator marker (blue) and the drone polyline (red, click any point for per-message detail). The one page that requires internet to render (OSM tiles + Leaflet CDN); the rest of dump3411 stays fully offline.
 
 ### Publishing
