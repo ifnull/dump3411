@@ -2,15 +2,9 @@
 
 Things that aren't blocking the project shipping, but are worth doing next. Nothing here is committed — adopt or drop items as priorities shift.
 
-## Done
+## Shipped
 
-- **MQTT publisher** — implemented in `mqtt_publisher.py`. Publishes per-drone retained state (debounced, latest-wins), a `/status` snapshot, detection events, and an `online`/`offline` LWT. Configured via `--mqtt-broker` / `MQTT_BROKER` env. See README for topic layout.
-- **Wi-Fi NAN decoding** — `wifi_feeder.py` now walks the NAN attributes inside a Public Action frame, finds the Service Descriptor Attribute matching the ODID Service ID, strips the send-counter byte out of the Service Info, and hands the ODID payload to the existing decoder. Sub-messages are routed into the tracker with `rid_source="wifi_nan"`; the dashboard's "By transport" table includes `wifi_nan` again.
-- **Self-ID decoding (msg type 0x3)** — added `parse_self_id` to both feeders, `update_self_id` to the tracker. Free-text "purpose of flight" string surfaces in the journal (`[BLE] … Type=Self ID Description="…"`), the JSON feed (`self_id` + `self_id_seen`), MQTT per-drone state, and as a new **Description** column in the dashboard.
-- **Defensive NAN logging** — when `_is_nan_action` matches but `_extract_nan_odid` returns None we now `log.warning` with a hex prefix of the frame body. Costs nothing when no malformed NAN ODID is in the air; provides immediate diagnostic data the day a real NAN transmitter shows up that doesn't quite match our spec interpretation.
-- **Persistent detection history** — opt-in SQLite log (`HISTORY_DB=…`) that hooks the same `on_change` callback MQTT uses. Per-drone debounced writes (default 1 s), size + age rotation (defaults 100 MB / 30 d). When enabled, `GET /history.json?uas_id=X` returns the full track and operator location; `GET /map?uas_id=X` serves a self-contained Leaflet page with the operator pin and the drone polyline. Dashboard UAS-IDs become clickable map links automatically (and stay plain text when history is off). `/status` reports `history_enabled` + stats. Disabled by default for SD-card safety.
-- **Recent detections dashboard section** — `GET /history/recent.json` lists drones seen in the last 24 h (default; configurable via `?since`/`?limit`). Dashboard renders them in a new table below the live drones with each UAS-ID hyperlinked to `/map`, and a `● live` badge next to anything also currently in the live tracker. Polled on a slow 30 s cadence; hidden when history is disabled.
-- **Packaging** — `pyproject.toml` (flat py-modules, no source-tree refactor; `pip install -e .` works and installs a `dump3411` console script) + `install.sh` that detects the monitor-mode Wi-Fi interface, rewrites the systemd unit's `ExecStart` paths to the checkout, installs apt deps, copies the unit, and enables the service. Idempotent — re-run after `git pull`. README's Quickstart now leads with `sudo ./install.sh`.
+Released work lives in [CHANGELOG.md](./CHANGELOG.md).
 
 ## Parked ideas
 
