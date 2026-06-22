@@ -61,6 +61,16 @@ The dashboard at `http://<host>:8754/` shows a live status pill, per-transport m
 
 If nothing's in range, the dashboard sits at IDLE and the journal stays quiet. That's expected — Remote ID is only broadcast by drones registered after September 2023, so coverage is sparse. See **[TESTING.md](./TESTING.md)** for how to put a transmitter on the air and confirm the whole path works.
 
+## Screenshots
+
+Dashboard with a single live drone — live drones table on top, Recent detections (last N days, configurable) below, both with clickable UAS-IDs that open the map view when history is enabled.
+
+![Dashboard](./docs/screenshots/dashboard.png)
+
+Map view at `/map?uas_id=…` — operator location pinned, drone polyline traced from history, each point clickable for the per-message detail (timestamp, altitude, speed, RSSI, transport).
+
+![Map view](./docs/screenshots/map.png)
+
 ## Hardware
 
 Confirmed on a Raspberry Pi Zero W with an Alfa AWUS036NEH adapter. Should work on **any Linux host** that has:
