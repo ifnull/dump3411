@@ -49,12 +49,13 @@ sudo systemctl restart systemd-journald
 
 ## What you'll see
 
-When a Remote-ID-compliant drone broadcasts in range, the journal logs each decoded message. All three ASTM F3411 transports are decoded — BLE, Wi-Fi Beacon, and Wi-Fi NAN:
+When a Remote-ID-compliant drone broadcasts in range, the journal logs each decoded message. All three ASTM F3411 transports are decoded — BLE, Wi-Fi Beacon, and Wi-Fi NAN — with the BLE lines split by Bluetooth generation (`[BLE]` legacy advertising vs `[BLE5]` long-range/extended, classified from the wire format since a Message Pack cannot fit a legacy advertisement):
 
 ```
-[BLE]          MAC=...  RSSI=-62dBm  Type=Basic ID         UAS-ID=1581F...
-[WiFi-Beacon]  MAC=...  RSSI=-71dBm  Type=Location/Vector  lat=40.7128 lon=-74.0060
-[WiFi-NAN]     MAC=...  RSSI=-68dBm  Type=Basic ID         UAS-ID=...
+[BLE]           MAC=...  RSSI=-62dBm  Type=Basic ID         UAS-ID=1581F...
+[BLE5]          MAC=...  RSSI=-68dBm  Type=Location/Vector  lat=40.7128 lon=-74.0060
+[WiFi-Beacon]   MAC=...  RSSI=-71dBm  Type=Location/Vector  lat=40.7128 lon=-74.0060
+[WiFi-NAN]      MAC=...  RSSI=-68dBm  Type=Basic ID         UAS-ID=...
 ```
 
 The dashboard at `http://<host>:8754/` shows a live status pill, per-transport message counters, CPU temperature, and a table of currently tracked drones with clickable Google Maps links for both the drone position and the operator location. A header toggle switches the display between imperial (`ft·kt·°F`) and metric (`m·m/s·°C`); the wire feed stays imperial regardless.
@@ -103,6 +104,7 @@ Edit any of those in the service file before installing.
 --ble-adapter HCI    HCI adapter for BLE scan          (default: hci0)
 --wifi-iface IFACE   monitor-mode interface             (default: wlan1)
 --channel-dwell SEC  seconds per channel before hop     (default: 0.2)
+--channel CH         stay on one WiFi channel           (default: hop 1-11)
 --serve HOST:PORT    serve /data/remoteid.json + /      (omit for journal-only)
 --ttl SECS           drop drones after N s of silence   (default: 60)
 --verbose            log every decoded message type
@@ -114,8 +116,8 @@ Edit any of those in the service file before installing.
 
 - Service health pill (ACTIVE / IDLE / OFFLINE)
 - Top tiles: uptime, last-beacon age, drones active, total messages, CPU temp
-- Per-transport message counters with last-seen timestamps
-- Table of currently tracked drones — UAS-ID, type, **drone + operator coordinates as Google Maps links**, altitude, AGL, ground speed, track, RSSI, transport, age
+- Per-transport message counters with last-seen timestamps (BLE split into Bluetooth 4 legacy and Bluetooth 5 long-range/extended, so a radio stack that can't receive BT5 is visible at a glance)
+- Table of currently tracked drones — UAS-ID, type, **drone + operator coordinates as Google Maps links**, altitude, AGL, ground speed, track, RSSI, transport (every transport the drone was heard on, most recent first — previously-heard transports dimmed), age
 - Unit toggle (per-browser, persists in `localStorage`)
 
 ## JSON feed
@@ -160,7 +162,7 @@ Topic layout (under the configured prefix, default `dump3411`):
 | `<prefix>/status` | 1 | yes | `GET /status` JSON, refreshed every ~5 s |
 | `<prefix>/drones/<uas_id>` | 1 | yes | per-drone state (same shape as one row of `drones[]` in the JSON feed), latest-wins, debounced 1 Hz |
 | `<prefix>/drones/<uas_id>` | 1 | yes | **empty payload** when a drone TTL-evicts — subscribers see the removal |
-| `<prefix>/events/detection` | 0 | no | one publish per decoded message: `{uas_id, rid_source, rssi, t}` |
+| `<prefix>/events/detection` | 0 | no | one publish per decoded message: `{uas_id, rid_source, rssi, t}` (`rid_source` is `ble5` for Bluetooth 5 long-range advertisements) |
 
 Units mirror FEED.md (imperial). The retained per-drone topic means a fresh HA restart immediately sees the current airspace. The `events/detection` stream is for automations that want to react on every beacon.
 

@@ -7,8 +7,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- `--channel CH` (on both `dump3411.py` and standalone `wifi_feeder.py`) pins the Wi-Fi radio to a single fixed 2.4 GHz channel (1-11) instead of hopping — full dwell on a transmitter whose channel you already know, at the cost of blind spots on the other ten. `--channel-dwell` is ignored in this mode.
+
+- `ble5` as a new `rid_source` value for Bluetooth 5 long-range / extended advertising (a Message Pack per advertisement) — Bluetooth 4 legacy advertisements keep the existing `ble`, so consumers are unaffected. BLE journal lines log as `[BLE]` / `[BLE5]`; `/status` gains a `ble5` per-source counter alongside `ble`; the dashboard Transport column, history DB and MQTT `events/detection` payload carry it through the existing `rid_source` field — no new field, no `schema_version` bump. Classification is from the wire format — Bluetooth 5 RID advertisements carry a Message Pack, which cannot fit a legacy ADV PDU's 31-byte cap — because BlueZ does not expose the PHY of received advertisements. Whether BT5 is received at all depends on adapter + BlueZ support for coded-PHY scanning; the `ble5` counter staying at zero while `ble` climbs means it isn't.
+
+- Per-drone transport history in the feed and dashboard. Drone rows gain an additive `rid_sources` array listing **every** transport the drone has been heard on since it entered the tracker, most-recent-first (e.g. `["wifi_beacon", "ble5", "ble"]`) — previously only the most recent transport was visible. The dashboard Source column renders the full list with the current transport at full intensity and previously-heard transports dimmed. No `schema_version` bump; `rid_source` keeps its most-recent-wins semantics.
+
 ### Fixed
 
+- BLE detection no longer stops for the life of the process after a transient BlueZ error. The BLE scanner runs as the whole BLE thread, so an exception escaping it ended Bluetooth reception silently while Wi-Fi kept serving — the dashboard showed empty airspace rather than a dead radio, and systemd's `Restart=on-failure` never fired because the process itself stayed healthy. Observed in the field as `[org.bluez.Error.NotReady] Resource Not Ready` a couple of seconds into startup: `wifi_feeder.set_monitor_mode()` runs `rfkill unblock all`, which also touches the Bluetooth device, and BlueZ reports the controller not ready while it powers back up. The scanner now reconnects with capped exponential backoff (1 s doubling to 60 s), which also covers adapter resets and bluetoothd restarts.
+- Bluetooth 5 extended-advertising Remote ID (a Message Pack per advertisement, e.g. from ArduRemoteID / Dronetag transmitters) was previously dropped at the service-data length check and logged as "Unrecognised service data". `extract_rid_payload` now accepts the pack format and decodes all sub-messages.
 - System message operator location now carries `operator_location_type` (`takeoff` \| `live_gnss` \| `fixed`, decoded from byte 1 bits 0-1). Some transmitters (reported: Potensic RID-916, over BLE) toggle this across messages, which made the `operator` block's coordinates look like they randomly jumped between the drone's own position and the operator's — they were actually alternating between the drone's takeoff point and a live operator fix, both reported under the same field. Surfaced as `operator.location_type` in the JSON feed (additive, no `schema_version` bump) and as a `(takeoff)` annotation next to the Operator column on the live dashboard table. Not yet persisted to the history DB / `/map` view — see TODO.md.
 
 

@@ -54,7 +54,8 @@ Use stdlib `http.server` — no async, no extra deps. dump3411 is designed to ru
 | `message_count` | number | — |  | running count of decoded RID messages for this `id` since first seen (per-drone; distinct from the envelope `messages`) |
 | `seen` | number | s | ✓ | `now - last_seen[id]` |
 | `seen_pos` | number | s |  | `now - last_pos_seen[id]` |
-| `rid_source` | string | — |  | `ble` \| `wifi_beacon` \| `wifi_nan` |
+| `rid_source` | string | — |  | `ble` \| `ble5` \| `wifi_beacon` \| `wifi_nan` — `ble` = Bluetooth 4 legacy advertising (one 25-byte ODID message per advertisement); `ble5` = Bluetooth 5 long-range / extended advertising (a Message Pack per advertisement), classified from the wire structure — a pack cannot fit legacy advertising's 31-byte PDU cap — because BlueZ does not expose the PHY of received advertisements. |
+| `rid_sources` | array of strings | — |  | **Every** transport this drone has been heard on since it entered the tracker, most-recent-first — e.g. `["wifi_beacon", "ble5", "ble"]`. Element 0 always matches the current `rid_source`. Values mirror `rid_source`. Resets when the drone TTL-evicts and reappears, same as `message_count`. |
 | `self_id` | string | — |  | Self-ID `description` — free-text purpose of flight (e.g. "Search and Rescue", "Photography Lesson") |
 | `self_id_seen` | number | s |  | `now - last_self_id_seen[id]` |
 | `operator` | object | — |  | from System / Operator-ID msgs (see below) |
@@ -77,7 +78,7 @@ A detection with no `lat`/`lon` is valid (Basic ID heard before GPS lock). Keep 
 
 1. **Single in-memory cache, keyed by `uas_id`.** One process, one `dict`, one `threading.Lock`. Each entry holds the latest decoded fields plus three monotonic timestamps: `last_seen`, `last_pos_seen`, `last_operator_seen`. Both radios run as threads inside this process and write into the same cache.
 2. **Convert to consumer units at write time.** RID broadcasts SI (m, m/s); the feed emits **ft, kt, ft/min**. The producer owns the conversion so the consumer has a single unit path. The decoders in `ble_feeder.py` / `wifi_feeder.py` currently emit SI — do the conversion in the cache layer, not in the decoder, so the journald output stays untouched.
-3. **Multi-transport precedence: most-recent message wins.** If the same `uas_id` is heard on more than one transport, the latest message updates `rid_source`, `rssi`, and any time-varying field (position, velocity, heading, altitude, operator block). Identity fields (`id_type`, `ua_type`) are write-once from the first Basic ID and not overwritten. `message_count` increments on every decoded message regardless of transport.
+3. **Multi-transport precedence: most-recent message wins.** If the same `uas_id` is heard on more than one transport, the latest message updates `rid_source`, `rssi`, and any time-varying field (position, velocity, heading, altitude, operator block). Identity fields (`id_type`, `ua_type`) are write-once from the first Basic ID and not overwritten. `message_count` increments on every decoded message regardless of transport. The set of all transports heard is preserved in the additive `rid_sources` array (most-recent-first), so a consumer can tell "currently on Wi-Fi Beacon, previously heard on BLE" from the row alone.
 4. **`seen`, `seen_pos`, `operator.seen` computed at serialize time** from the cached monotonic timestamps relative to `now`.
 5. **Drop stale ids** from the cache after a producer-side timeout (default: 60 s with no messages on any transport) so the feed reflects current airspace.
 6. **Snapshot-only HTTP handler.** Under the cache lock, copy the live state into a plain dict; release the lock; then serialize and return. Never decode, convert, or compute under request.

@@ -30,7 +30,7 @@ from typing import Tuple
 import feed_server
 from ble_feeder import BLEFeeder
 from tracker import Tracker
-from wifi_feeder import WiFiFeeder
+from wifi_feeder import CHANNELS_24, WiFiFeeder
 
 # Logging is configured (root) by the feeder modules at import time; reuse it.
 log = logging.getLogger("dump3411.main")
@@ -62,6 +62,11 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--channel-dwell", type=float, default=0.2,
         help="Seconds per channel before WiFi hopper moves on (default: 0.2)",
+    )
+    p.add_argument(
+        "--channel", type=int, default=None, metavar="CH",
+        help="Stay on a single fixed WiFi channel (1-11) instead of hopping "
+             "(default: hop 1-11)",
     )
     p.add_argument(
         "--serve", default=None, metavar="HOST:PORT",
@@ -132,7 +137,10 @@ def _parse_args() -> argparse.Namespace:
              "and /history/recent.json's default (default: 7 days). "
              "Also read from $HISTORY_RECENT_DAYS.",
     )
-    return p.parse_args()
+    args = p.parse_args()
+    if args.channel is not None and args.channel not in CHANNELS_24:
+        p.error(f"--channel must be {CHANNELS_24[0]}-{CHANNELS_24[-1]}")
+    return args
 
 
 # -- Main ----------------------------------------------------------------------
@@ -210,7 +218,8 @@ def main() -> None:
     ble  = BLEFeeder(adapter=args.ble_adapter, verbose=args.verbose,
                      tracker=tracker)
     wifi = WiFiFeeder(iface=args.wifi_iface, verbose=args.verbose,
-                      channel_dwell=args.channel_dwell, tracker=tracker)
+                      channel_dwell=args.channel_dwell, channel=args.channel,
+                      tracker=tracker)
 
     # Daemon threads: radios produce, sweeper expires stale entries.
     threading.Thread(target=lambda: asyncio.run(ble.run()),

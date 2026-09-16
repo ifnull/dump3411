@@ -3,8 +3,9 @@
 dump3411 WiFi detector — offline Remote ID capture.
 
 Puts a USB monitor-mode adapter (e.g. Alfa AWUS036NEH, RT3070) into monitor
-mode, hops 2.4 GHz channels 1-11, decodes Remote ID from 802.11 beacon frames
-(ASTM F3411), and prints detections to the terminal / systemd journal.
+mode, hops 2.4 GHz channels 1-11 (or pins one channel with --channel),
+decodes Remote ID from 802.11 beacon frames (ASTM F3411), and prints
+detections to the terminal / systemd journal.
 No network connection, no token, no data sharing.
 
 Supports:
@@ -14,7 +15,7 @@ Supports:
 Uses raw AF_PACKET sockets (stdlib only — no scapy dependency).
 
 Usage:
-    sudo python3 wifi_feeder.py --iface wlan1 [--verbose]
+    sudo python3 wifi_feeder.py --iface wlan1 [--channel CH] [--verbose]
 
 Requirements:
     sudo apt install iw rfkill
@@ -643,11 +644,13 @@ class ChannelHopper(threading.Thread):
 
 class WiFiFeeder:
     def __init__(self, iface: str, verbose: bool = False, channel_dwell: float = 0.2,
-                 tracker: "Tracker | None" = None):
+                 channel: int | None = None, tracker: "Tracker | None" = None):
         self.iface     = iface
         self.verbose   = verbose
         self.tracker   = tracker      # optional; when set, decoded messages also feed it
-        self.hopper    = ChannelHopper(iface, CHANNELS_24, channel_dwell)
+        self.channel   = channel      # fixed channel; None = hop CHANNELS_24
+        self.hopper    = None if channel is not None else \
+            ChannelHopper(iface, CHANNELS_24, channel_dwell)
         self.count     = 0
         self.nan_count = 0
         self._stop     = threading.Event()  # for orderly shutdown from another thread
@@ -836,10 +839,14 @@ class WiFiFeeder:
 
     def run(self):
         log.info(f"dump3411 WiFi detector — interface {self.iface}")
-        log.info(f"Channels: {CHANNELS_24}")
 
         set_monitor_mode(self.iface)
-        self.hopper.start()
+        if self.hopper is not None:
+            log.info(f"Channels: {CHANNELS_24}")
+            self.hopper.start()
+        else:
+            log.info(f"Fixed channel: {self.channel} (hopping disabled)")
+            set_channel(self.iface, self.channel)
 
         log.info("Scanning for Remote ID beacon frames (ASTM F3411)...")
 
@@ -860,7 +867,8 @@ class WiFiFeeder:
             log.info("Stopped.")
         finally:
             sock.close()
-            self.hopper.stop()
+            if self.hopper is not None:
+                self.hopper.stop()
             restore_managed_mode(self.iface)
             log.info(f"[Summary] Beacon RID={self.count}  NAN frames={self.nan_count}")
 
@@ -883,10 +891,17 @@ def main():
         help="Seconds to dwell on each channel before hopping (default: 0.2)"
     )
     parser.add_argument(
+        "--channel", type=int, default=None, metavar="CH",
+        help="Stay on a single fixed channel (1-11) instead of hopping"
+    )
+    parser.add_argument(
         "--verbose", "-v", action="store_true",
         help="Log every decoded message and NAN frame"
     )
     args = parser.parse_args()
+
+    if args.channel is not None and args.channel not in CHANNELS_24:
+        parser.error(f"--channel must be {CHANNELS_24[0]}-{CHANNELS_24[-1]}")
 
     signal.signal(signal.SIGTERM, _handle_sigterm)
 
@@ -894,6 +909,7 @@ def main():
         iface=args.iface,
         verbose=args.verbose,
         channel_dwell=args.channel_dwell,
+        channel=args.channel,
     )
     feeder.run()
 

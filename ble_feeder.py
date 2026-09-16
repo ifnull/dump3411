@@ -4,7 +4,11 @@ dump3411 BLE detector — offline Remote ID capture.
 
 Listens for BLE Remote ID advertisements (ASTM F3411, service UUID 0xFFFA),
 decodes them, and prints detections to the terminal / systemd journal.
-No network connection, no token, no data sharing.
+Distinguishes the two BLE transports on the wire: Bluetooth 4 legacy
+advertising carries one 25-byte ODID message per advertisement (reported
+as rid_source "ble", logged as [BLE]), while Bluetooth 5 long-range /
+extended advertising carries a Message Pack (reported as rid_source "ble5",
+logged as [BLE5]). No network connection, no token, no data sharing.
 
 Usage:
     sudo python3 ble_feeder.py [--adapter hci0] [--verbose]
@@ -90,7 +94,12 @@ def extract_rid_payload(service_data: bytes) -> tuple[str, str] | tuple[None, No
     ASTM F3411-22a BLE service data layout:
       Byte 0:    App Code (0x0D)
       Byte 1:    Rotation counter
-      Bytes 2-26: 25-byte ODID message
+      Bytes 2+:  One 25-byte ODID message (Bluetooth 4 legacy transport) or a
+                 Message Pack (Bluetooth 5 extended transport, 3 + 25*N bytes)
+
+    A Message Pack cannot fit a legacy ADV PDU (31-byte cap = 27 bytes of
+    service data), so "payload longer than a single message" is how the
+    caller classifies the transport as Bluetooth 5.
     """
     if len(service_data) == 27 and service_data[0] == 0x0D:
         return service_data[2:].hex(), "tail25_of_27"
@@ -98,6 +107,8 @@ def extract_rid_payload(service_data: bytes) -> tuple[str, str] | tuple[None, No
         return service_data[1:].hex(), "tail25_of_26"
     if len(service_data) == 25:
         return service_data.hex(), "raw25"
+    if len(service_data) > 27 and service_data[0] == 0x0D:
+        return service_data[2:].hex(), "pack"
     return None, None
 
 
@@ -167,6 +178,19 @@ OPERATOR_LOCATION_TYPE = {
 }
 
 
+def parse_self_id(data: bytes) -> dict:
+    """Parse a Self-ID message (msg type 0x3) per ASTM F3411 (25 bytes).
+
+    See wifi_feeder.parse_self_id for the full byte-layout commentary.
+    """
+    if len(data) < 25:
+        return {}
+    return {
+        "description_type": data[1],
+        "description":      data[2:25].rstrip(b'\x00').decode('ascii', errors='replace'),
+    }
+
+
 def parse_system_msg(data: bytes) -> dict:
     """Parse a System message (msg type 0x4) per ASTM F3411.
 
@@ -227,6 +251,8 @@ def decode_rid_message(raw_bytes: bytes) -> dict | None:
         result.update(parse_basic_id(raw_bytes))
     elif msg_type == 0x1:
         result.update(parse_location(raw_bytes))
+    elif msg_type == 0x3:
+        result.update(parse_self_id(raw_bytes))
     elif msg_type == 0x4:
         result.update(parse_system_msg(raw_bytes))
     elif msg_type == 0x5:
@@ -269,6 +295,17 @@ class BLEFeeder:
         if not decoded:
             return
 
+        # Transport classification: BlueZ does not expose the PHY of a
+        # received advertisement, but the wire format does. Bluetooth 4
+        # legacy advertising carries one 25-byte ODID message per
+        # advertisement; Bluetooth 5 long-range / extended advertising
+        # carries a Message Pack. A pack physically cannot fit a legacy ADV
+        # PDU (31-byte payload cap), so pack => Bluetooth 5. Bluetooth 5
+        # advertisements report rid_source "ble5"; Bluetooth 4 legacy keeps
+        # the existing "ble" so consumers see no change.
+        is_pack = decoded.get("message_type") == "Message Pack"
+        ble_src = "ble5" if is_pack else "ble"
+
         if decoded.get("message_type") == "Message Pack":
             sub_messages = decoded.get("messages", [])
         else:
@@ -287,7 +324,7 @@ class BLEFeeder:
 
             # Feed the per-drone tracker if one was injected.
             if self.tracker is not None:
-                self._update_tracker(mac, mtype, msg, adv.rssi)
+                self._update_tracker(mac, mtype, msg, adv.rssi, ble_src)
 
             # Existing journald logging — unchanged.
             if self.verbose or mtype in ("Basic ID", "Location/Vector", "Self ID"):
@@ -304,18 +341,23 @@ class BLEFeeder:
                 else:
                     detail = ""
                 log.info(
-                    f"[BLE] MAC={mac}  RSSI={adv.rssi}dBm  "
+                    f"[{ble_src.upper()}] MAC={mac}  RSSI={adv.rssi}dBm  "
                     f"Type={mtype}  {detail}"
                 )
 
-    def _update_tracker(self, mac: str, mtype: str, msg: dict, rssi) -> None:
-        """Route a decoded sub-message to the appropriate Tracker.update_*."""
+    def _update_tracker(self, mac: str, mtype: str, msg: dict, rssi,
+                        rid_source: str) -> None:
+        """Route a decoded sub-message to the appropriate Tracker.update_*.
+
+        ``rid_source`` is the reported BLE transport: "ble" (Bluetooth 4
+        legacy advertising) or "ble5" (Bluetooth 5 long-range / extended).
+        """
         if mtype == "Basic ID":
             self.tracker.update_basic_id(
                 mac=mac, uas_id=msg.get("uas_id", ""),
                 id_type_raw=msg.get("id_type_raw", 0),
                 ua_type_raw=msg.get("ua_type_raw", 0),
-                rssi=rssi, rid_source="ble",
+                rssi=rssi, rid_source=rid_source,
             )
         elif mtype == "Location/Vector" and "latitude" in msg:
             self.tracker.update_location(
@@ -326,7 +368,7 @@ class BLEFeeder:
                 gs_mps=msg.get("ground_speed"),
                 heading_deg=msg.get("heading"),
                 vspeed_mps=msg.get("vertical_speed"),
-                rssi=rssi, rid_source="ble",
+                rssi=rssi, rid_source=rid_source,
             )
         elif mtype == "System":
             self.tracker.update_system(
@@ -335,29 +377,63 @@ class BLEFeeder:
                 op_lon=msg.get("operator_lon"),
                 op_location_type=msg.get("operator_location_type"),
                 alt_takeoff_m=msg.get("alt_takeoff_geo"),
-                rssi=rssi, rid_source="ble",
+                rssi=rssi, rid_source=rid_source,
             )
         elif mtype == "Operator ID":
             self.tracker.update_operator_id(
                 mac=mac, operator_id=msg.get("operator_id", ""),
-                rssi=rssi, rid_source="ble",
+                rssi=rssi, rid_source=rid_source,
             )
+        elif mtype == "Self ID":
+            self.tracker.update_self_id(
+                mac=mac, description=msg.get("description", ""),
+                rssi=rssi, rid_source=rid_source,
+            )
+
+    # Reconnect backoff bounds. The common failure is a startup race — the
+    # WiFi feeder's `rfkill unblock all` (wifi_feeder.set_monitor_mode) also
+    # touches the Bluetooth device, and BlueZ answers NotReady for a second
+    # or two while it powers the controller back up. One retry covers that;
+    # the cap keeps a genuinely absent adapter down to one line per minute.
+    RETRY_DELAY_MIN = 1.0
+    RETRY_DELAY_MAX = 60.0
 
     async def run(self):
         log.info(f"dump3411 BLE detector — adapter {self.adapter}")
         log.info("Scanning for Remote ID broadcasts (UUID 0xFFFA)...")
 
-        scanner = BleakScanner(
-            detection_callback=self.on_advertisement,
-            adapter=self.adapter,
-        )
-        async with scanner:
-            ticker = 0
-            while True:
-                await asyncio.sleep(1.0)
-                ticker += 1
-                if ticker % 60 == 0:
-                    log.info(f"[Heartbeat] seen={self.count}  temp={get_cpu_temp()}°C")
+        # Scan under a retry loop: this coroutine is the whole BLE thread
+        # (dump3411.py runs it via asyncio.run in a daemon thread), so an
+        # escaping exception silently ends BLE for the life of the process
+        # while WiFi keeps serving — the failure looks like empty airspace,
+        # not a dead radio. Anything BlueZ raises is transient as far as we
+        # are concerned: log it, back off, rebuild the scanner.
+        delay = self.RETRY_DELAY_MIN
+        while True:
+            try:
+                scanner = BleakScanner(
+                    detection_callback=self.on_advertisement,
+                    adapter=self.adapter,
+                )
+                async with scanner:
+                    # Reset only once the scanner is actually up, so an
+                    # adapter that fails on every start keeps backing off.
+                    delay = self.RETRY_DELAY_MIN
+                    ticker = 0
+                    while True:
+                        await asyncio.sleep(1.0)
+                        ticker += 1
+                        if ticker % 60 == 0:
+                            log.info(f"[Heartbeat] seen={self.count}  temp={get_cpu_temp()}°C")
+            except asyncio.CancelledError:
+                raise                       # shutdown, not a radio failure
+            except Exception as exc:
+                log.warning(
+                    f"BLE scan on {self.adapter} stopped ({type(exc).__name__}: {exc}) "
+                    f"— retrying in {delay:.0f}s"
+                )
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, self.RETRY_DELAY_MAX)
 
 
 def main():

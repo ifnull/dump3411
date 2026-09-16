@@ -88,6 +88,19 @@ _UA_TYPE_STRINGS = {
 SCHEMA_VERSION = 1
 
 
+def _touch_sources(state: "DroneState", rid_source: str) -> None:
+    """Record a transport on the drone's heard-from list.
+
+    ``DroneState.sources`` holds every transport the drone has been received
+    on since it entered the tracker, most-recent-first — the companion to
+    the most-recent-wins ``rid_source``. ``sources[0]`` always matches the
+    transport of the latest message. Reset naturally on TTL eviction.
+    """
+    if rid_source in state.sources:
+        state.sources.remove(rid_source)
+    state.sources.insert(0, rid_source)
+
+
 def _read_cpu_temp() -> Optional[float]:
     """Best-effort CPU temperature (°C). Returns None on non-Pi/Linux hosts."""
     try:
@@ -119,6 +132,10 @@ class DroneState:
     # Last-message metadata — most-recent wins.
     rssi_dbm: Optional[float] = None
     rid_source: Optional[str] = None
+    # Every transport heard from since the drone entered the tracker,
+    # most-recent-first. Values mirror `rid_source` ("ble" | "ble5" |
+    # "wifi_beacon" | "wifi_nan"). See _touch_sources().
+    sources: list = dataclasses.field(default_factory=list)
 
     # Operator / System block — most-recent wins.
     op_lat: Optional[float]            = None
@@ -219,6 +236,7 @@ class Tracker:
             state.last_seen      = now
             state.rssi_dbm       = rssi
             state.rid_source     = rid_source
+            _touch_sources(state, rid_source)
             self._mac_to_uas[mac] = uas_id
             self._fire_change(state, now)
 
@@ -245,6 +263,7 @@ class Tracker:
             state.vspeed_mps     = vspeed_mps
             state.rssi_dbm       = rssi
             state.rid_source     = rid_source
+            _touch_sources(state, rid_source)
             state.message_count += 1
             state.last_seen      = now
             state.last_pos_seen  = now
@@ -282,6 +301,7 @@ class Tracker:
             if alt_takeoff_m is not None: state.op_alt_takeoff_m = alt_takeoff_m
             state.rssi_dbm              = rssi
             state.rid_source            = rid_source
+            _touch_sources(state, rid_source)
             state.message_count        += 1
             state.last_seen             = now
             state.last_operator_seen    = now
@@ -304,6 +324,7 @@ class Tracker:
             if description:             state.self_id = description
             state.rssi_dbm              = rssi
             state.rid_source            = rid_source
+            _touch_sources(state, rid_source)
             state.message_count        += 1
             state.last_seen             = now
             state.last_self_id_seen     = now
@@ -326,6 +347,7 @@ class Tracker:
             if operator_id:             state.operator_id = operator_id
             state.rssi_dbm              = rssi
             state.rid_source            = rid_source
+            _touch_sources(state, rid_source)
             state.message_count        += 1
             state.last_seen             = now
             state.last_operator_seen    = now
@@ -387,6 +409,7 @@ class Tracker:
         if s.last_pos_seen is not None:
             row["seen_pos"] = round(now_mono - s.last_pos_seen, 1)
         if s.rid_source is not None:   row["rid_source"]  = s.rid_source
+        if s.sources:                  row["rid_sources"] = list(s.sources)
         if s.self_id is not None:      row["self_id"]     = s.self_id
         if s.last_self_id_seen is not None:
             row["self_id_seen"] = round(now_mono - s.last_self_id_seen, 1)
@@ -475,7 +498,9 @@ if __name__ == "__main__":
 
     t = Tracker(ttl_seconds=60.0)
 
-    # A drone heard first via BLE: Basic ID → Location → System → Operator-ID.
+    # A drone heard first via BLE legacy, then via BLE5 long-range:
+    # Basic ID → Location → System → Operator-ID. The feed row must show
+    # the most-recent transport and rid_sources listing both, most-recent-first.
     t.update_basic_id(
         mac="aa:bb:cc:dd:ee:01", uas_id="158190SK3X2YB7",
         id_type_raw=1, ua_type_raw=2,
@@ -486,18 +511,23 @@ if __name__ == "__main__":
         lat=40.7128, lon=-74.0060,
         alt_geo_m=125.5, height_agl_m=115.0,
         gs_mps=8.2, heading_deg=271.0, vspeed_mps=-3.25,
-        rssi=-60.0, rid_source="ble",
+        rssi=-60.0, rid_source="ble5",
     )
     t.update_system(
         mac="aa:bb:cc:dd:ee:01",
         op_lat=40.6900, op_lon=-74.0100,
         alt_takeoff_m=15.0,
-        rssi=-61.0, rid_source="ble",
+        rssi=-61.0, rid_source="ble5",
     )
     t.update_operator_id(
         mac="aa:bb:cc:dd:ee:01", operator_id="FA3OPERATOR",
-        rssi=-61.0, rid_source="ble",
+        rssi=-61.0, rid_source="ble5",
     )
+
+    print("--- BLE-only snapshot ---")
+    print(json.dumps(t.snapshot(), indent=2))
+    assert t.snapshot()["drones"][0]["rid_source"] == "ble5"
+    assert t.snapshot()["drones"][0]["rid_sources"] == ["ble5", "ble"]
 
     # An orphan Location on a new MAC arrives before its Basic ID — must drop.
     t.update_location(
@@ -509,7 +539,8 @@ if __name__ == "__main__":
     )
 
     # Same drone now heard via WiFi (different MAC, MAC rotated or other radio).
-    # Basic ID first, then Location; the Location should win for the position.
+    # Basic ID first, then Location; the Location should win for the position
+    # and rid_sources must list WiFi first, both BLE generations after.
     t.update_basic_id(
         mac="99:88:77:66:55:44", uas_id="158190SK3X2YB7",
         id_type_raw=1, ua_type_raw=2,
@@ -523,4 +554,9 @@ if __name__ == "__main__":
         rssi=-45.0, rid_source="wifi_beacon",
     )
 
-    print(json.dumps(t.snapshot(), indent=2))
+    final = t.snapshot()
+    print("--- After WiFi takeover ---")
+    print(json.dumps(final, indent=2))
+    assert final["drones"][0]["rid_source"] == "wifi_beacon"
+    assert final["drones"][0]["rid_sources"] == ["wifi_beacon", "ble5", "ble"]
+    print("smoke test OK")
