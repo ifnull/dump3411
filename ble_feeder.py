@@ -137,12 +137,14 @@ def parse_location(data: bytes) -> dict:
     if len(data) < 25:
         return {}
 
-    height_type = (data[1] >> 3) & 0x01
-    dir_segment = (data[1] >> 4) & 0x01
-    speed_mult  = (data[1] >> 5) & 0x01
+    speed_mult  = data[1] & 0x01
+    dir_segment = (data[1] >> 1) & 0x01
+    height_type = (data[1] >> 2) & 0x01
 
     heading = float(data[2]) + (180.0 if dir_segment else 0.0)
-    speed   = data[3] * (0.75 if speed_mult else 0.25)
+    # Above 255 * 0.25 = 63.75 m/s the encoding switches to 0.75 m/s steps
+    # offset by 63.75, so 254.25 m/s still fits in a uint8.
+    speed   = data[3] * 0.75 + 63.75 if speed_mult else data[3] * 0.25
     vspeed  = struct.unpack_from('<b', data, 4)[0] * 0.5
 
     lat = struct.unpack_from('<i', data, 5)[0] * 1e-7
@@ -196,14 +198,14 @@ def parse_system_msg(data: bytes) -> dict:
 
     See wifi_feeder.parse_system_msg for the full byte-layout commentary.
     """
-    if len(data) < 19:
+    if len(data) < 20:
         return {}
     loc_type    = data[1] & 0x03
     op_lat      = struct.unpack_from('<i', data,  2)[0] * 1e-7
     op_lon      = struct.unpack_from('<i', data,  6)[0] * 1e-7
-    area_count  = data[10]
-    area_radius = data[11] * 10
-    alt_takeoff = struct.unpack_from('<H', data, 17)[0] * 0.5 - 1000.0
+    area_count  = struct.unpack_from('<H', data, 10)[0]
+    area_radius = data[12] * 10
+    alt_takeoff = struct.unpack_from('<H', data, 18)[0] * 0.5 - 1000.0
 
     result: dict = {
         "area_count":    area_count,

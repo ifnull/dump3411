@@ -134,13 +134,13 @@ def parse_location(data: bytes) -> dict:
 
       byte 0:        msg_type<<4 | version    (caller has consumed)
       byte 1:        status flags
-                       bits 0-2: Operational Status
-                       bit 3:    Height Type (0 = Above Takeoff, 1 = AGL)
-                       bit 4:    E/W Direction Segment (0 = 0-179°, 1 = 180-359°)
-                       bit 5:    Speed Multiplier (0 = ×0.25 m/s, 1 = ×0.75 m/s)
-                       bits 6-7: reserved
+                       bit 0:    Speed Multiplier (0 = ×0.25 m/s, 1 = ×0.75 m/s + 63.75)
+                       bit 1:    E/W Direction Segment (0 = 0-179°, 1 = 180-359°)
+                       bit 2:    Height Type (0 = Above Takeoff, 1 = AGL)
+                       bit 3:    reserved
+                       bits 4-7: Operational Status
       byte 2:        Direction (uint8, 0-179°; add 180° if segment bit set)
-      byte 3:        Speed Horizontal (uint8 × multiplier)
+      byte 3:        Speed Horizontal (uint8 × 0.25, or × 0.75 + 63.75 m/s)
       byte 4:        Speed Vertical (int8 × 0.5 m/s)
       bytes 5-8:     Latitude (int32 × 1e-7°)
       bytes 9-12:    Longitude (int32 × 1e-7°)
@@ -152,12 +152,14 @@ def parse_location(data: bytes) -> dict:
     if len(data) < 25:
         return {}
 
-    height_type = (data[1] >> 3) & 0x01
-    dir_segment = (data[1] >> 4) & 0x01
-    speed_mult  = (data[1] >> 5) & 0x01
+    speed_mult  = data[1] & 0x01
+    dir_segment = (data[1] >> 1) & 0x01
+    height_type = (data[1] >> 2) & 0x01
 
     heading = float(data[2]) + (180.0 if dir_segment else 0.0)
-    speed   = data[3] * (0.75 if speed_mult else 0.25)
+    # Above 255 * 0.25 = 63.75 m/s the encoding switches to 0.75 m/s steps
+    # offset by 63.75, so 254.25 m/s still fits in a uint8.
+    speed   = data[3] * 0.75 + 63.75 if speed_mult else data[3] * 0.25
     vspeed  = struct.unpack_from('<b', data, 4)[0] * 0.5
 
     lat = struct.unpack_from('<i', data, 5)[0] * 1e-7
@@ -194,22 +196,22 @@ def parse_system_msg(data: bytes) -> dict:
       byte 1:        classification + operator location source
       bytes 2-5:     Operator Latitude  (int32 × 1e-7°)
       bytes 6-9:     Operator Longitude (int32 × 1e-7°)
-      byte 10:       Flight Area Count (uint8)
-      byte 11:       Flight Area Radius (uint8 × 10 m)
-      bytes 12-13:   Flight Area Ceiling (uint16 × 0.5 − 1000 m)
-      bytes 14-15:   Flight Area Floor   (uint16 × 0.5 − 1000 m)
-      byte 16:       UA Classification
-      bytes 17-18:   Operator Altitude / takeoff geo (uint16 × 0.5 − 1000 m)
-      bytes 19+:     timestamp, reserved — not decoded
+      bytes 10-11:   Flight Area Count (uint16)
+      byte 12:       Flight Area Radius (uint8 × 10 m)
+      bytes 13-14:   Flight Area Ceiling (uint16 × 0.5 − 1000 m)
+      bytes 15-16:   Flight Area Floor   (uint16 × 0.5 − 1000 m)
+      byte 17:       UA Classification (EU category / class)
+      bytes 18-19:   Operator Altitude / takeoff geo (uint16 × 0.5 − 1000 m)
+      bytes 20+:     timestamp, reserved — not decoded
     """
-    if len(data) < 19:
+    if len(data) < 20:
         return {}
     loc_type    = data[1] & 0x03
     op_lat      = struct.unpack_from('<i', data,  2)[0] * 1e-7
     op_lon      = struct.unpack_from('<i', data,  6)[0] * 1e-7
-    area_count  = data[10]
-    area_radius = data[11] * 10
-    alt_takeoff = struct.unpack_from('<H', data, 17)[0] * 0.5 - 1000.0
+    area_count  = struct.unpack_from('<H', data, 10)[0]
+    area_radius = data[12] * 10
+    alt_takeoff = struct.unpack_from('<H', data, 18)[0] * 0.5 - 1000.0
 
     result: dict = {
         "area_count":    area_count,
