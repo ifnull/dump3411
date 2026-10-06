@@ -51,6 +51,13 @@ log = logging.getLogger("dump3411.wifi")
 ASTM_OUI      = bytes([0xFA, 0x0B, 0xBC])
 ASTM_OUI_TYPE = 0x0D  # Remote ID app code
 
+# Parrot SA's OUI. Some Remote ID beacons carry the ASTM layout under it:
+# OUI(3) + type(1) + send counter(1) + ODID Message Pack. The layout comes
+# from Sky-Spy's receiver, not from a Parrot capture. Parrot uses this OUI
+# for other vendor IEs too, so it only counts when a well-formed pack
+# follows (see _is_message_pack). Unrelated to the French scheme's own OUI.
+PARROT_OUI = bytes([0x90, 0x3A, 0xE6])
+
 # Wi-Fi Alliance NAN OUI (action frames)
 NAN_OUI      = bytes([0x50, 0x6F, 0x9A])
 NAN_OUI_TYPE = 0x13  # NAN
@@ -373,6 +380,15 @@ def _parse_dot11_mgmt(data: bytes) -> tuple[int, str, int] | None:
     return frame_subtype, addr2, 24
 
 
+def _is_message_pack(data: bytes) -> bool:
+    """True if data starts with a structurally valid ODID Message Pack:
+    type 0xF, 25-byte messages, 1-9 of them, all present."""
+    if len(data) < 3 or (data[0] >> 4) != 0xF or data[1] != 25:
+        return False
+    count = data[2]
+    return 1 <= count <= 9 and len(data) >= 3 + count * 25
+
+
 def _extract_beacon_rid(body: bytes) -> bytes | None:
     """
     Walk 802.11 beacon Information Elements looking for the vendor-specific
@@ -391,6 +407,10 @@ def _extract_beacon_rid(body: bytes) -> bytes | None:
     msg_type byte — every downstream field shifts by one and the uas_id grows
     leading control bytes. Strip the counter too.
 
+    The same layout under Parrot's OUI (90:3A:E6) is accepted when a valid
+    Message Pack follows; its type byte isn't checked, since its value
+    isn't documented.
+
     Returns the ODID message (single message or Message Pack) or None.
     """
     offset = 12  # skip fixed parameters
@@ -404,6 +424,8 @@ def _extract_beacon_rid(body: bytes) -> bytes | None:
             info = body[offset + 2: end]
             if len(info) >= 6 and info[:3] == ASTM_OUI and info[3] == ASTM_OUI_TYPE:
                 return info[5:]   # OUI(3) + vendor_type(1) + counter(1)
+            if len(info) >= 6 and info[:3] == PARROT_OUI and _is_message_pack(info[5:]):
+                return info[5:]
         offset = end
     return None
 
