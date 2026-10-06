@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Wi-Fi Beacon Remote ID under Parrot's OUI `90:3A:E6`, alongside the ASTM `FA:0B:BC` element. The layout is the same (OUI, type, send counter, ODID Message Pack), as decoded by the Sky-Spy receiver; it hasn't been checked against a capture from a Parrot drone. Parrot uses the OUI for other vendor IEs too, so the element only counts when a structurally valid Message Pack follows. These beacons were silently ignored before. Reported as `wifi_beacon`, like the ASTM form.
+
 - `--channel CH` (on both `dump3411.py` and standalone `wifi_feeder.py`) pins the Wi-Fi radio to a single fixed 2.4 GHz channel (1-11) instead of hopping — full dwell on a transmitter whose channel you already know, at the cost of blind spots on the other ten. `--channel-dwell` is ignored in this mode.
 
 - `ble5` as a new `rid_source` value for Bluetooth 5 long-range / extended advertising (a Message Pack per advertisement) — Bluetooth 4 legacy advertisements keep the existing `ble`, so consumers are unaffected. BLE journal lines log as `[BLE]` / `[BLE5]`; `/status` gains a `ble5` per-source counter alongside `ble`; the dashboard Transport column, history DB and MQTT `events/detection` payload carry it through the existing `rid_source` field — no new field, no `schema_version` bump. Classification is from the wire format — Bluetooth 5 RID advertisements carry a Message Pack, which cannot fit a legacy ADV PDU's 31-byte cap — because BlueZ does not expose the PHY of received advertisements. Whether BT5 is received at all depends on adapter + BlueZ support for coded-PHY scanning; the `ble5` counter staying at zero while `ble` climbs means it isn't.
