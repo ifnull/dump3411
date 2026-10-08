@@ -70,4 +70,5 @@ py-modules = [
     "wifi_feeder",
     "mqtt_publisher",
     "history",
+    "version",
 ]

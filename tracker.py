@@ -45,6 +45,8 @@ import threading
 import time
 from typing import Callable, Optional
 
+from version import get_version
+
 log = logging.getLogger("dump3411.tracker")
 
 
@@ -453,6 +455,7 @@ class Tracker:
             )
         return {
             "schema_version": SCHEMA_VERSION,
+            "version":        get_version(),
             "uptime_s":       uptime_s,
             "messages_total": messages_total,
             "drones_active":  drones_active,

@@ -130,7 +130,7 @@ Quick check from any LAN host:
 curl -s http://<host>:8754/data/remoteid.json | python3 -m json.tool
 ```
 
-`GET /status` is also available — operational health (uptime, last beacon, CPU temp, per-source counters). Useful for Home Assistant binary sensors and uptime monitors.
+`GET /status` is also available — operational health (uptime, last beacon, CPU temp, per-source counters, and the running `version`). Useful for Home Assistant binary sensors and uptime monitors.
 
 ## MQTT publisher
 

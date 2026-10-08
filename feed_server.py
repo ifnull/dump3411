@@ -29,6 +29,7 @@ import urllib.parse
 from typing import Tuple
 
 from tracker import Tracker
+from version import get_version
 
 log = logging.getLogger("dump3411.feed")
 
@@ -104,6 +105,7 @@ _DASHBOARD_HTML = """<!doctype html>
 <h1>dump3411
   <span id="pill" class="pill idle">…</span>
   <span id="hostname" class="host"></span>
+  <span id="version" class="host"></span>
   <span class="unit-toggle">
     <button id="u-imperial" class="unit-pill" onclick="setUnits('imperial')">ft·kt·°F</button>
     <button id="u-metric"   class="unit-pill" onclick="setUnits('metric')">m·m/s·°C</button>
@@ -142,7 +144,7 @@ _DASHBOARD_HTML = """<!doctype html>
   <tbody id="recent"><tr><td class="empty" colspan="6">no recent detections</td></tr></tbody>
 </table>
 
-<footer>Polls /status and /data/remoteid.json every 1.5 s &middot; FEED.md is the wire contract.</footer>
+<footer>Polls /status and /data/remoteid.json every 1.5 s &middot; FEED.md is the wire contract. <span id="footer-version"></span></footer>
 
 <script>
 // Sources we actively decode into the tracker. We always show these so a
@@ -310,6 +312,10 @@ async function tick() {
       setPill('IDLE', 'idle');
     }
 
+    if (s.version) {
+      document.getElementById('version').textContent = s.version;
+      document.getElementById('footer-version').textContent = '· ' + s.version;
+    }
     document.getElementById('uptime').textContent        = fmt.age(s.uptime_s);
     document.getElementById('last_seen').textContent     = s.last_seen_s == null ? 'never' : fmt.age(s.last_seen_s);
     document.getElementById('drones_active').textContent = s.drones_active;
@@ -549,7 +555,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
     tracker: Tracker        # filled in by make_server()
     history  = None         # HistoryWriter | None; None disables /history and /map
-    server_version = "dump3411/1"
+    server_version = f"dump3411/{get_version()}"
     sys_version    = ""     # suppress the default "Python/3.x" Server suffix
 
     def do_GET(self) -> None:
@@ -762,6 +768,15 @@ if __name__ == "__main__":
         print(f"  body: {len(body)} bytes, drones={len(doc['drones'])}, "
               f"schema_v={doc['schema_version']}, messages={doc['messages']}")
         assert doc["schema_version"] == 1
+        assert headers["Server"].strip() == f"dump3411/{get_version()}"
+
+        status_url = f"http://{host}:{port}/status"
+        with urllib.request.urlopen(status_url, timeout=2) as sr:
+            status_doc = json.loads(sr.read())
+            status_server = sr.headers["Server"]
+        print(f"GET /status -> version={status_doc.get('version')!r}")
+        assert status_doc["version"] == get_version()
+        assert status_server.strip() == f"dump3411/{get_version()}"
         assert doc["drones"][0]["id"]          == "158190SK3X2YB7"
         assert doc["drones"][0]["lat"]         == 40.7128
         assert doc["drones"][0]["alt_geom_ft"] == round(125.5 * 3.28084, 1)
