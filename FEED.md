@@ -93,3 +93,24 @@ A detection with no `lat`/`lon` is valid (Basic ID heard before GPS lock). Keep 
 | Version | Change |
 |---|---|
 | 1 | Initial contract (draft). |
+
+---
+
+## `/status`
+
+Operational health for the dashboard and Home Assistant-style monitors.
+Additive fields do **not** bump `schema_version`.
+
+| Field | Type | Req | Notes |
+|---|---|:--:|---|
+| `schema_version` | number | ✓ | Same integer as the JSON feed |
+| `version` | string | ✓ | Running build: `git describe` when served from a checkout, archive describe when served from a GitHub source tarball, else `pyproject.toml` version, else `unknown`. Computed once at process start. |
+| `uptime_s` | number | ✓ | Seconds since process start |
+| `messages_total` | number | ✓ | Decoded RID messages since start |
+| `drones_active` | number | ✓ | Entries currently in the tracker |
+| `last_seen_s` | number \| null | ✓ | Seconds since any radio last decoded a message |
+| `by_source` | object | ✓ | Per-transport `{messages, last_seen_s}` |
+| `cpu_temp_c` | number \| null | ✓ | Host CPU temperature (°C), `null` when unreadable |
+| `history_enabled` | boolean | ✓ | `true` when `--history-db` is configured |
+| `history` | object |  | `{rows, drones, size_bytes, earliest_ts, latest_ts}`; present only when history is enabled |
+

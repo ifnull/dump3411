@@ -31,6 +31,7 @@ import feed_server
 from ble_feeder import BLEFeeder
 from tracker import Tracker
 from wifi_feeder import CHANNELS_24, WiFiFeeder
+from version import get_version
 
 # Logging is configured (root) by the feeder modules at import time; reuse it.
 log = logging.getLogger("dump3411.main")
@@ -147,6 +148,7 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = _parse_args()
+    log.info("dump3411 %s starting", get_version())
 
     tracker = Tracker(ttl_seconds=args.ttl)
 

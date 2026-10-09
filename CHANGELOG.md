@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Running build version on `/status` (`version`), the dashboard header/footer, the HTTP `Server:` header, and the startup log line. Computed once at process start from `git describe` (checkout), `.git_archival.txt` (source archive), or `pyproject.toml`.
+
 - `--channel CH` (on both `dump3411.py` and standalone `wifi_feeder.py`) pins the Wi-Fi radio to a single fixed 2.4 GHz channel (1-11) instead of hopping — full dwell on a transmitter whose channel you already know, at the cost of blind spots on the other ten. `--channel-dwell` is ignored in this mode.
 
 - `ble5` as a new `rid_source` value for Bluetooth 5 long-range / extended advertising (a Message Pack per advertisement) — Bluetooth 4 legacy advertisements keep the existing `ble`, so consumers are unaffected. BLE journal lines log as `[BLE]` / `[BLE5]`; `/status` gains a `ble5` per-source counter alongside `ble`; the dashboard Transport column, history DB and MQTT `events/detection` payload carry it through the existing `rid_source` field — no new field, no `schema_version` bump. Classification is from the wire format — Bluetooth 5 RID advertisements carry a Message Pack, which cannot fit a legacy ADV PDU's 31-byte cap — because BlueZ does not expose the PHY of received advertisements. Whether BT5 is received at all depends on adapter + BlueZ support for coded-PHY scanning; the `ble5` counter staying at zero while `ble` climbs means it isn't.
